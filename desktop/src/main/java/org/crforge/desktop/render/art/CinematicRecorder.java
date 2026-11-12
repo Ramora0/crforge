@@ -66,6 +66,10 @@ public final class CinematicRecorder extends ApplicationAdapter {
   private int subFrame;
   private int framesWritten;
   private int framesWanted;
+  /** Ticks drawn after the battle's last one (3 s). */
+  private static final int OUTRO_TICKS = 60;
+
+  private int outroTicks;
   private final java.util.List<String[]> sounds = new java.util.ArrayList<>();
   private float soundOrigin;
   private boolean still;
@@ -193,11 +197,18 @@ public final class CinematicRecorder extends ApplicationAdapter {
     for (int batchFrames = 0; batchFrames < 8 && framesWritten < framesWanted; batchFrames++) {
       if (!still && subFrame == 0 && framesWritten > 0) {
         previous = current;
-        if (!player.step()) {
-          framesWanted = framesWritten;
-          break;
+        if (outroTicks > 0 || !player.step()) {
+          // the battle is over: hold its last frame for a short outro, the clock running on so
+          // animations and effects (a falling king tower) play out
+          if (outroTicks >= OUTRO_TICKS) {
+            framesWanted = framesWritten;
+            break;
+          }
+          outroTicks++;
+          current = later(current);
+        } else {
+          current = BattleAdapter.frame(player.getSession(), view::sideName);
         }
-        current = BattleAdapter.frame(player.getSession(), view::sideName);
         renderer.setTickData(
             BattleAdapter.attackTimers(player.getSession()),
             BattleAdapter.projectileFlights(player.getSession()));
@@ -213,6 +224,22 @@ public final class CinematicRecorder extends ApplicationAdapter {
       }
     }
     if (framesWritten >= framesWanted) finish();
+  }
+
+  /** The frame one tick later with nothing changed: the outro's clock. */
+  private static BattleFrame later(BattleFrame f) {
+    return new BattleFrame(
+        f.tick() + 1,
+        f.timeMs() + 50,
+        f.overtime(),
+        f.elixirRate(),
+        f.entities(),
+        f.sides(),
+        f.ended(),
+        f.winner(),
+        f.over(),
+        f.halted(),
+        f.messages());
   }
 
   private void drawFrame(float alpha) {

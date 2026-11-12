@@ -208,6 +208,7 @@ public final class BattleHud implements Disposable {
     art.begin(drawer.batch(), projection);
     try {
       drawHealthBars(ui, frame, view, proj);
+      drawDeployTimers(ui, frame, view, proj);
       float s = width / HUD_WIDTH_DU;
       // the top panel's lower edge sits on the top zone's edge (the zone is deeper than the
       // panel: the game leaves the phone's status bar above it); the bottom panel sits on the
@@ -221,6 +222,56 @@ public final class BattleHud implements Disposable {
       if (frame.sides().size() >= 2) drawCrowns(ui, frame, view, proj, width, s);
     } finally {
       art.end();
+    }
+  }
+
+  // ---------------------------------------------------------------- deploy timers
+
+  /** First tick each deploying unit was seen. */
+  private final Map<Integer, Integer> deploySeen = new HashMap<>();
+
+  /**
+   * The deploy clock ({@code troopDeployTimer_player/_enemy}: 324 frames at 30 fps, {@code end} at
+   * 299) at each card play that is still deploying, one per play (the units of one card appear
+   * on one tick), timed to end when the row's {@code DeployTime} runs out.
+   */
+  private void drawDeployTimers(
+      ScScene ui, BattleFrame frame, ViewOrientation view, ArtProjection p) {
+    Map<String, float[]> plays = new HashMap<>();
+    java.util.Set<Integer> live = new java.util.HashSet<>();
+    for (EntityView e : frame.entities()) {
+      if (!e.isCharacter() || e.kind() == EntityView.Kind.TOWER) continue;
+      if (!e.deploying()) continue;
+      live.add(e.id());
+      int seen = deploySeen.computeIfAbsent(e.id(), k -> frame.tick());
+      String key = seen + "|" + e.name() + "|" + e.side();
+      float[] acc = plays.computeIfAbsent(key, k -> new float[] {0, 0, 0, seen, 0});
+      acc[0] += e.x();
+      acc[1] += e.y();
+      acc[2] += 1;
+      acc[4] = view.blue(e.side()) ? 1 : 0;
+      VisualLookup.Unit unit = lookup.unit(e.name(), view.blue(e.side()));
+      int deployMs = unit == null ? 1000 : unit.integer("DeployTime", 1000);
+      plays.get(key)[3] = seen + deployMs / 50f; // the tick it ends
+    }
+    deploySeen.keySet().retainAll(live);
+    if (plays.isEmpty()) return;
+    float ppdu = p.pixelsPerDisplayUnit();
+    float now = frame.tick() - 1 + alpha;
+    for (float[] acc : plays.values()) {
+      boolean blue = acc[4] > 0;
+      int id = ui.export(blue ? "troopDeployTimer_player" : "troopDeployTimer_enemy");
+      if (id < 0) continue;
+      ScScene.Clip clip = ui.clip(id);
+      int endFrame = clip == null ? 299 : Math.max(0, clip.labelFrame("end"));
+      float remainingS = Math.max(0f, (acc[3] - now) * 0.05f);
+      int f = Math.max(0, Math.round(endFrame - remainingS * (clip == null ? 30 : clip.fps())));
+      float x = p.x(view, acc[0] / acc[2]);
+      float y = p.y(view, acc[1] / acc[2]);
+      transform.setToTranslation(x, y);
+      transform.scale(ppdu, -ppdu);
+      tint.set(1, 1, 1, 1);
+      art.draw(ui, id, f, transform, tint, HudArt.NONE);
     }
   }
 

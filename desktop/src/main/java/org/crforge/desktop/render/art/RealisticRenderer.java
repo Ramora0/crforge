@@ -586,7 +586,9 @@ public final class RealisticRenderer implements Disposable {
     transform.mul(local);
     transform.scale(sxs, -sys);
     if (q.flip()) transform.scale(-1, 1);
-    tint.set(shadowColor.r, shadowColor.g, shadowColor.b, shadowColor.a * q.alpha());
+    // a unit still dropping in (the deploy filter's fade) casts a shadow as faint as itself
+    float fade = q.filter() != null && q.filter().length == 7 ? q.filter()[6] : 1f;
+    tint.set(shadowColor.r, shadowColor.g, shadowColor.b, shadowColor.a * q.alpha() * fade * fade);
     if (q.overrides() != null) {
       drawer.draw(q.scene(), q.id(), q.frame(), transform, tint, q.overrides());
     } else {
