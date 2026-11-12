@@ -24,6 +24,7 @@ touched.
 """
 from __future__ import annotations
 
+import csv
 import io
 import json
 import os
@@ -57,8 +58,8 @@ index.json:
      "pivots": {"hudoffset": [x, y, z]},  "prefabs": ["<nested prefab path>"],
      "materials": ["<MaterialAsset rmat path>"], "missing": [...]}},
  "models": {"<model path>": {"glb", "source", "bytes", "triangles", "vertices", "joints",
-     "clips": [{"name", "source", "frames", "fps", "tracks", "dropped_tracks"}],
-     "textures": {"<ktx path>": "<png path or 'embedded'>"}, "missing": [...]}},
+     "clips": [{"name", "source", "frames", "fps", "tracks", "dropped_tracks", "inAsm"}],
+     "textures": {"<ktx path>": "<png path or 'embedded'>"}, "missing": [...], "clip_errors": {...}}},
  "asm": {"<asm path>": "sc3d/asm/<path>.json"},
  "materials": {"<rmat path>": "sc3d/materials/<path>.json"},
  "errors": {"<path>": "<message>"}}
@@ -83,7 +84,8 @@ def _ref(s: str | None) -> str | None:
 class AssetDB:
     def __init__(self, src: Source, tmp: Path):
         if not src.has(SCDB):
-            raise FileNotFoundError(f"{SCDB} not in the game files")
+            raise SystemExit(f"{SCDB} not found in the game files: the 3D assets ship in "
+                             "split_install_time_asset_pack.apk, pass it too")
         path = src.local_path(SCDB, tmp)
         self.con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         self.meta = {r[0]: (r[1], r[2]) for r in self.con.execute("select path, assetType, assetFilename from meta")}
@@ -127,7 +129,6 @@ def table_prefabs(tables: dict[str, str]) -> dict[str, list[str]]:
                     if m.group(1) not in lst:
                         lst.append(m.group(1))
         elif rel.endswith(".csv") and "PrefabAsset" in text[:4096]:
-            import csv
             rows = list(csv.reader(io.StringIO(text)))
             if not rows or "PrefabAsset" not in rows[0]:
                 continue
