@@ -19,7 +19,7 @@ import org.crforge.desktop.render.ViewOrientation;
 public final class ArtProjection {
 
   /** Arena display units per tile across the arena (x). */
-  public static final float DU_PER_TILE_X = 29.7f;
+  public static final float DU_PER_TILE_X = 29.75f;
 
   /** Arena display units per tile along the arena (y). */
   public static final float DU_PER_TILE_Y = 24.12f;
@@ -66,9 +66,21 @@ public final class ArtProjection {
     return originY + view.y(gameY) * pixelsPerTileY() / 1000f;
   }
 
+  /**
+   * Display units a height of one game unit lifts a sprite up the screen: the orthographic camera's
+   * 0.02975 * sin(phi), cos(phi) = 0.811 (a Tower Princess at 2200 stands on the tower floor, 38 du
+   * up).
+   */
+  public static final float DU_PER_HEIGHT_UNIT = 0.01742f;
+
+  /**
+   * The arena art sits this many display units below the units' frame (fit on the checkerboard).
+   */
+  public static final float ARENA_ART_DY = 3f;
+
   /** World pixels for a height above the ground in game units (drawn straight up the screen). */
   public float height(float gameUnits) {
-    return gameUnits * pixelsPerTileY() / 1000f;
+    return gameUnits * DU_PER_HEIGHT_UNIT * pixelsPerDisplayUnit();
   }
 
   /** World x of the arena art's origin (its centre line). */

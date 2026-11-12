@@ -43,6 +43,12 @@ public final class ArenaScene {
   private final Affine2 transform = new Affine2();
   private final Color white = new Color(1, 1, 1, 1);
   private String locationName;
+  private int[] shadow = {0, 0, 100, 50};
+
+  /** The location's shadow colour {@code {ShadowR, ShadowG, ShadowB, ShadowA}} (absent = 0). */
+  public int[] shadow() {
+    return shadow;
+  }
 
   public ArenaScene(ArtCache cache, GameTables tables, ReplayFile replay) {
     this(cache, tables, System.getProperty("crforge.art.location"));
@@ -69,6 +75,13 @@ public final class ArenaScene {
     }
     String file = RealisticRenderer.text(row, "FileName");
     if (file == null) return false;
+    shadow =
+        new int[] {
+          RealisticRenderer.integer(row, "ShadowR", 0),
+          RealisticRenderer.integer(row, "ShadowG", 0),
+          RealisticRenderer.integer(row, "ShadowB", 0),
+          RealisticRenderer.integer(row, "ShadowA", 50)
+        };
     Optional<Path> csv = cache.file(file);
     if (csv.isEmpty()) {
       log.warn("Location {} names {}, which the art cache lacks", name, file);
@@ -167,6 +180,7 @@ public final class ArenaScene {
     for (Placed p : ground) {
       float x = proj.arenaOriginX() + (p.x() - 9000) / 1000f * proj.pixelsPerTile();
       float y = proj.arenaOriginY() - p.y() / 1000f * proj.pixelsPerTileY();
+      if (p == ground.get(0)) y -= ArtProjection.ARENA_ART_DY * s; // the background art's fit
       transform.setToTranslation(x, y);
       transform.scale(s, -s);
       ScScene.Clip clip = p.scene().clip(p.export());

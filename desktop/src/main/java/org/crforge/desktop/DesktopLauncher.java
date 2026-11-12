@@ -555,11 +555,11 @@ public class DesktopLauncher {
 
   /**
    * Records the replay with the game's art (the realistic view) to a video or a still, offscreen:
-   * {@code --record out.mp4 [--size 1080x1920] [--fps 60] [--from seconds] [--seconds n] [--bottom
+   * {@code --record out.mp4 [--size 1080x2340] [--fps 60] [--from seconds] [--seconds n] [--bottom
    * 0|1] [--location PvP_royal]}.
    */
   private static void record(ReplayFile replay, GameTables tables, String[] args) {
-    String size = Optional.ofNullable(option(args, "--size")).orElse("1080x1920");
+    String size = Optional.ofNullable(option(args, "--size")).orElse("1080x2340");
     String[] wh = size.split("x");
     int fps = Integer.parseInt(Optional.ofNullable(option(args, "--fps")).orElse("60"));
     float from = Float.parseFloat(Optional.ofNullable(option(args, "--from")).orElse("0"));
@@ -579,6 +579,8 @@ public class DesktopLauncher {
     Lwjgl3ApplicationConfiguration config = new Lwjgl3ApplicationConfiguration();
     config.setTitle("CRForge - recording");
     config.setWindowedMode(320, 240);
+    // a position of its own: no monitor is asked for (a sleeping display has none)
+    config.setWindowPosition(0, 0);
     config.setInitialVisible(false);
     config.useVsync(false);
     config.setForegroundFPS(0);

@@ -38,9 +38,16 @@ public final class ScScene {
       int fps,
       int bank,
       int[] children,
+      String[] names,
       int[] blend,
       int[][] frames,
       Map<Integer, String> labels) {
+
+    /** The child index of the instance of that name, or -1. */
+    public int childNamed(String name) {
+      for (int i = 0; i < names.length; i++) if (name.equals(names[i])) return i;
+      return -1;
+    }
 
     public int frameCount() {
       return frames.length;
@@ -135,6 +142,7 @@ public final class ScScene {
                       Math.max(1, c.path("fps").asInt(30)),
                       c.path("bank").asInt(),
                       ints(c.path("children")),
+                      strings(c.path("names")),
                       ints(c.path("blend")),
                       frames,
                       labels));
@@ -157,6 +165,12 @@ public final class ScScene {
     float[] out = new float[a.size()];
     Iterator<JsonNode> it = a.elements();
     for (int i = 0; it.hasNext(); i++) out[i] = (float) it.next().asDouble();
+    return out;
+  }
+
+  private static String[] strings(JsonNode a) {
+    String[] out = new String[a.size()];
+    for (int i = 0; i < out.length; i++) out[i] = a.get(i).asText("");
     return out;
   }
 

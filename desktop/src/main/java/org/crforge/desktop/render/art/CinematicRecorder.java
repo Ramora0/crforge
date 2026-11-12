@@ -51,6 +51,7 @@ public final class CinematicRecorder extends ApplicationAdapter {
   private ArenaScene arena;
   private RealisticRenderer renderer;
   private BattleHud hud;
+  private EffectLayer effects;
   private FrameBuffer fbo;
   private OrthographicCamera camera;
   private ReplayPlayer player;
@@ -90,8 +91,9 @@ public final class CinematicRecorder extends ApplicationAdapter {
     if (session == null) throw new IllegalStateException("the replay cannot be played");
     var tileMap = session.getBattle().getWorld().getTileMap();
     view = ViewOrientation.of(tileMap, settings.bottomSide());
-    // the arena (with its art's border) fills the width; the hand sits below it
-    float pixelsPerTile = w / 20.5f;
+    // as the game frames it on a phone: the arena fills the width between the HUD bars at the
+    // top (13.5% of the height) and the bottom (12.5%)
+    float pixelsPerTile = w / 18.6f;
     float arenaHeight =
         tileMap.heightUnits()
             / 1000f
@@ -99,12 +101,17 @@ public final class CinematicRecorder extends ApplicationAdapter {
             * ArtProjection.DU_PER_TILE_Y
             / ArtProjection.DU_PER_TILE_X;
     float originX = (w - tileMap.widthUnits() / 1000f * pixelsPerTile) / 2f;
-    float originY = (h - arenaHeight) / 2f + h * 0.035f;
+    float bottomHud = h * 0.125f;
+    float topHud = h * 0.135f;
+    float originY = bottomHud + (h - topHud - bottomHud - arenaHeight) / 2f;
     proj =
         new ArtProjection(
             pixelsPerTile, originX, originY, tileMap.widthUnits(), tileMap.heightUnits());
     arena = new ArenaScene(cache, tables, replay);
+    int[] sh = arena.shadow();
+    renderer.setShadowColor(sh[0], sh[1], sh[2], sh[3]);
     hud = new BattleHud(cache, renderer.drawer());
+    effects = new EffectLayer(cache);
 
     // fast-forward to the start
     int startTick = Math.round(settings.fromSeconds() * TICKS_PER_SECOND);
@@ -112,6 +119,10 @@ public final class CinematicRecorder extends ApplicationAdapter {
       player.drainAreaHits();
     }
     current = BattleAdapter.frame(player.getSession(), view::sideName);
+    renderer.setTickData(
+        BattleAdapter.attackTimers(player.getSession()),
+        BattleAdapter.projectileFlights(player.getSession()));
+    effects.update(current, null, tables, view);
     previous = current;
     still = settings.out().toString().toLowerCase().endsWith(".png");
     framesWanted = still ? 1 : Math.round(settings.seconds() * settings.fps());
@@ -180,6 +191,10 @@ public final class CinematicRecorder extends ApplicationAdapter {
           break;
         }
         current = BattleAdapter.frame(player.getSession(), view::sideName);
+        renderer.setTickData(
+            BattleAdapter.attackTimers(player.getSession()),
+            BattleAdapter.projectileFlights(player.getSession()));
+        effects.update(current, previous, tables, view);
       }
       float alpha = still ? 1f : (subFrame + 1f) / perTick;
       drawFrame(alpha);
@@ -200,7 +215,14 @@ public final class CinematicRecorder extends ApplicationAdapter {
     camera.update();
     renderer.drawer().batch().setProjectionMatrix(camera.combined);
     arena.drawGround(renderer.drawer(), proj, view, current, previous, alpha);
+    float seconds = (previous.timeMs() + (current.timeMs() - previous.timeMs()) * alpha) / 1000f;
+    renderer.drawer().begin();
+    effects.drawBelow(renderer.drawer(), proj, view, seconds);
+    renderer.drawer().end();
     renderer.render(current, previous, alpha, tables, view, proj, camera.combined);
+    renderer.drawer().begin();
+    effects.drawAbove(renderer.drawer(), proj, view, seconds);
+    renderer.drawer().end();
     arena.drawOverlay(renderer.drawer(), proj, view, current, alpha);
     hud.draw(current, view, proj, settings.width(), settings.height(), camera.combined);
     pixels.clear();

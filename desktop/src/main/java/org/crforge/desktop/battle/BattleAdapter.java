@@ -82,6 +82,39 @@ public final class BattleAdapter {
   }
 
   /** Reads one frame of a session, its messages naming side 0 blue and side 1 red. */
+  /**
+   * Each character's attack timer and attack sequence index, by entity id: {@code {attackTimerMs,
+   * attackSequenceIndex, loadTimerMs}}. Presentation only: the realistic view times its attack
+   * clips by them.
+   */
+  public static java.util.Map<Integer, int[]> attackTimers(BattleSession session) {
+    java.util.Map<Integer, int[]> out = new java.util.HashMap<>();
+    for (BattleEntity entity : session.getBattle().getBattle().getHolder().entities()) {
+      if (entity instanceof WorldEntity unit && unit.getTargeting() != null) {
+        var t = unit.getTargeting();
+        out.put(
+            unit.getId(),
+            new int[] {t.getAttackTimerMs(), t.getAttackSequenceIndex(), t.getLoadTimerMs()});
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Each projectile's flight, by entity id: {@code {z, startX, startY}} (game units). Presentation
+   * only: the realistic view lifts the sprite by z and picks its pitch frame by the share of the
+   * flight done.
+   */
+  public static java.util.Map<Integer, int[]> projectileFlights(BattleSession session) {
+    java.util.Map<Integer, int[]> out = new java.util.HashMap<>();
+    for (BattleEntity entity : session.getBattle().getBattle().getHolder().entities()) {
+      if (entity instanceof ProjectileEntity p) {
+        out.put(p.getId(), new int[] {p.getZ(), p.getStartX(), p.getStartY()});
+      }
+    }
+    return out;
+  }
+
   public static BattleFrame frame(BattleSession session) {
     return frame(session, BattleSession::sideName);
   }

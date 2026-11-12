@@ -49,6 +49,31 @@ public final class ScDrawer {
     return batch;
   }
 
+  private com.badlogic.gdx.graphics.glutils.ShaderProgram silhouette;
+
+  /**
+   * Draws with the texture's coverage only, coloured by the tint (a shadow): on, until turned off.
+   * Call between draws; it flushes the batch.
+   */
+  public void setSilhouette(boolean on) {
+    if (on && silhouette == null) {
+      String vertex =
+          "attribute vec4 a_position; attribute vec4 a_color; attribute vec2 a_texCoord0;\n"
+              + "uniform mat4 u_projTrans; varying vec4 v_color; varying vec2 v_texCoords;\n"
+              + "void main() { v_color = a_color; v_color.a = v_color.a * (255.0/254.0);\n"
+              + "  v_texCoords = a_texCoord0; gl_Position = u_projTrans * a_position; }";
+      String fragment =
+          "#ifdef GL_ES\nprecision mediump float;\n#endif\n"
+              + "varying vec4 v_color; varying vec2 v_texCoords; uniform sampler2D u_texture;\n"
+              + "void main() { gl_FragColor = v_color * texture2D(u_texture, v_texCoords).a; }";
+      silhouette = new com.badlogic.gdx.graphics.glutils.ShaderProgram(vertex, fragment);
+      if (!silhouette.isCompiled()) {
+        throw new IllegalStateException("silhouette shader: " + silhouette.getLog());
+      }
+    }
+    batch.setShader(on ? silhouette : null);
+  }
+
   /** Starts a batch of drawing (blend state reset). */
   public void begin() {
     batch.begin();
@@ -66,7 +91,32 @@ public final class ScDrawer {
    */
   public void draw(ScScene scene, int id, int frame, Affine2 transform, Color tint) {
     stack[0].set(transform);
+    overrides = null;
     drawObject(scene, id, frame, 0, tint.r, tint.g, tint.b, tint.a, BLEND_NORMAL);
+    setBlend(BLEND_NORMAL);
+  }
+
+  /**
+   * A named child instance drawn differently: at its own timeline {@code frame} (a turret's
+   * rotation), or replaced by another clip ({@code scene}, {@code id}, {@code frame}: a character
+   * standing at a placeholder such as the king tower's {@code king_dummy}).
+   */
+  public record Override(String name, ScScene scene, int id, int frame, boolean flip) {}
+
+  private java.util.List<Override> overrides;
+
+  /** As {@link #draw}, with the named child instances drawn as the overrides say. */
+  public void draw(
+      ScScene scene,
+      int id,
+      int frame,
+      Affine2 transform,
+      Color tint,
+      java.util.List<Override> childOverrides) {
+    stack[0].set(transform);
+    overrides = childOverrides;
+    drawObject(scene, id, frame, 0, tint.r, tint.g, tint.b, tint.a, BLEND_NORMAL);
+    overrides = null;
     setBlend(BLEND_NORMAL);
   }
 
@@ -112,8 +162,30 @@ public final class ScDrawer {
       }
       int childBlend =
           child < clip.blend().length && clip.blend()[child] != 0 ? clip.blend()[child] : blend;
+      if (overrides != null && child < clip.names().length && !clip.names()[child].isEmpty()) {
+        Override o = overrideFor(clip.names()[child]);
+        if (o != null) {
+          java.util.List<Override> saved = overrides;
+          if (o.flip()) stack[depth + 1].scale(-1, 1);
+          if (o.scene() == null) {
+            overrides = null;
+            drawObject(
+                scene, clip.children()[child], o.frame(), depth + 1, cr, cg, cb, ca, childBlend);
+          } else {
+            overrides = null;
+            drawObject(o.scene(), o.id(), o.frame(), depth + 1, cr, cg, cb, ca, childBlend);
+          }
+          overrides = saved;
+          continue;
+        }
+      }
       drawObject(scene, clip.children()[child], frame, depth + 1, cr, cg, cb, ca, childBlend);
     }
+  }
+
+  private Override overrideFor(String name) {
+    for (Override o : overrides) if (o.name().equals(name)) return o;
+    return null;
   }
 
   private void drawCommand(
