@@ -49,6 +49,7 @@ A full battle-scope extraction takes about 20 s on a 10-core laptop and uses abo
     locations/...              per-arena composition (level_*.sc + export + object placements);
                                csv_logic/locations.csv "FileName" points here
     tilemaps/...               decoded tilemaps (locations.csv "TileDataFileName")
+    fonts/supercell-magic_0.ttf  the HUD's font (copied as-is from assets/font/)
 ```
 
 `manifest.json`:

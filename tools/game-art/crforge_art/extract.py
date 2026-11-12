@@ -74,6 +74,20 @@ def decode_tables(src: Source, root: Path, log) -> dict[str, str]:
     return tables
 
 
+# the game's fonts the battle HUD draws with (Supercell-Magic: the HUD's numbers and labels)
+FONTS = ("font/supercell-magic_0.ttf",)
+
+
+def copy_fonts(src: Source, root: Path, log) -> None:
+    """Copies the HUD's fonts (plain TrueType in the game files) into <root>/fonts/."""
+    for rel in FONTS:
+        if src.has(rel):
+            _atomic_write(root / "fonts" / Path(rel).name, src.read(rel))
+            log(f"font: fonts/{Path(rel).name}")
+        else:
+            log(f"  warning: {rel} not in the game files; the HUD falls back to its own font")
+
+
 # ---------------------------------------------------------------- worker side
 _SRC: Source | None = None
 
@@ -127,6 +141,7 @@ def run(src: Source, out: Path, scope: str = "battle", workers: int | None = Non
     log(f"cache:  {root}")
 
     tables = decode_tables(src, root, log)
+    copy_fonts(src, root, log)
     available = [r[3:] for r in src.names("sc/") if r.endswith(".sc") and r.count("/") == 1]
     selected, missing = scope_mod.select(scope, available, tables)
     if only:

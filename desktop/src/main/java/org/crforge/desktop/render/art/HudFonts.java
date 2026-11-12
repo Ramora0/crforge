@@ -20,7 +20,9 @@ import com.badlogic.gdx.utils.Disposable;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
 
@@ -35,11 +37,8 @@ final class HudFonts implements Disposable {
   /** System property naming the game font file (a .ttf). */
   static final String PROPERTY = "crforge.hudFont";
 
-  private static final String[] CANDIDATES = {
-    System.getProperty("user.home")
-        + "/coding/python/ai/crai/game_assets/pack/assets/font/supercell-magic_0.ttf",
-    System.getProperty("user.home") + "/.crforge/fonts/supercell-magic_0.ttf",
-  };
+  /** The game font's file in the art cache, as the extractor writes it. */
+  private static final String CACHE_FONT = "fonts/supercell-magic_0.ttf";
 
   /** Gap between a top-aligned field's top and its capitals, in font sizes. */
   private static final float TOP_INSET = 0.1f;
@@ -54,8 +53,10 @@ final class HudFonts implements Disposable {
   private FreeTypeFontGenerator generator() {
     if (generator != null) return generator;
     String configured = System.getProperty(PROPERTY);
-    for (String candidate : configured != null ? new String[] {configured} : CANDIDATES) {
-      Path p = Paths.get(candidate);
+    List<Path> candidates = new ArrayList<>();
+    if (configured != null) candidates.add(Paths.get(configured));
+    else ArtCache.locate().flatMap(c -> c.file(CACHE_FONT)).ifPresent(candidates::add);
+    for (Path p : candidates) {
       if (Files.isRegularFile(p)) {
         try {
           generator = new FreeTypeFontGenerator(new FileHandle(p.toFile()));
