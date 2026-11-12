@@ -873,7 +873,7 @@ An unaffordable card in the hand is turned to its luminance (grey), with no wash
 
 Not used: `sound_get_crown_1..3` (the same sample pitched like `crown_appear`), `First_Crown` / `Second_Crown` / `Third_Crown` (listed beside the achievement and chest sounds, likely menu sounds), `Pre_result` / `Post_result_loop` music, and the `win_battle_confetti_blue/red(_top)` effects (70 confetti particles at 100–200 speed, up to 800 z speed under -150 gravity, 10–15 s): where and when the client starts them is not in the data, and burst over the winner's king they hang over it as a cloud.
 
-**The start jingle (INFERRED).** `MUSIC_START_TIMES` starts `BattleMusic` at 180 s left, when the clock starts; the location's `Sound` jingle belongs to the intro banners before it. A recording starts at the clock, so the mixer starts the music after the jingle's length (`audio.battle_schedule`).
+**The start jingle (INFERRED).** `MUSIC_START_TIMES` starts `BattleMusic` at 180 s left, when the clock starts; the location's `Sound` jingle belongs to the intro banners before it. A recording starts at the clock, so the mixer starts the music when the jingle's sound ends: its length up to its last audible point (above -40 dBFS), so its silent tail leaves no gap (`audio.battle_schedule`).
 
 **Thinning the mix (INFERRED, ours; `audio.py`).** The banks' own per-event limits come first (`max_instances`, stealing, `cooldown`: Skeleton steps 4 instances and 0.15 s; Archer arrow hits 2 and 0.1 s). On top of them:
 

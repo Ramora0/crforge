@@ -524,7 +524,7 @@ def battle_schedule(cache_root: Path, clock: float | None, dur: float,
         if clock >= 179.5 and loc.get("Sound"):
             t0 = max(0.0, clock - 180)
             out.append((t0, loc["Sound"]))
-            wait = _event_seconds(loc["Sound"], index or {})
+            wait = _event_seconds(loc["Sound"], index or {}, cache_root / "audio")
             if wait > 0:
                 late = [(t, ref) for t, ref in out if _is_music(event_key(ref)) and t <= t0 + wait]
                 for cue in late:
@@ -540,8 +540,10 @@ def battle_schedule(cache_root: Path, clock: float | None, dur: float,
     return out
 
 
-def _event_seconds(ref: str, index: dict) -> float:
-    """How long an event plays: its longest layer's start plus its longest choice's sample."""
+def _event_seconds(ref: str, index: dict, audio: Path | None = None) -> float:
+    """How long an event plays: its longest layer's start plus its longest choice's sample. With
+    `audio` (the samples' folder), up to the samples' last audible point (above -40 dBFS), so a
+    sample's silent tail does not count (a jingle's tail would leave a gap before the music)."""
     ev = index.get("events", {}).get(event_key(ref))
     if not ev:
         return 0.0
@@ -551,7 +553,13 @@ def _event_seconds(ref: str, index: dict) -> float:
     for layer in ev.get("layers", []):
         for c in layer.get("choices", []):
             if c.get("sample") in names:
-                out = max(out, layer.get("start", 0.0) + names[c["sample"]])
+                length = names[c["sample"]]
+                p = audio / bank / f"{c['sample']}.ogg" if audio is not None else None
+                if p is not None and p.exists():
+                    loud = np.nonzero(np.abs(_load(p, {})).max(axis=1) > _db(-40.0))[0]
+                    if len(loud):
+                        length = (loud[-1] + 1) / RATE
+                out = max(out, layer.get("start", 0.0) + length)
     return out
 
 
