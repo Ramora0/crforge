@@ -137,6 +137,11 @@ public class DesktopLauncher {
       }
     }
 
+    if (replay != null && recordArgument(args).isPresent()) {
+      record(replay, tables, args);
+      return;
+    }
+
     Lwjgl3ApplicationConfiguration config = new Lwjgl3ApplicationConfiguration();
     config.setTitle(
         replay != null
@@ -533,5 +538,51 @@ public class DesktopLauncher {
       out.println(line);
     }
     return replay;
+  }
+
+  static final String RECORD_ARGUMENT = "--record";
+
+  /** The video (or {@code .png} still) the arguments name with {@value #RECORD_ARGUMENT}. */
+  static Optional<Path> recordArgument(String[] args) {
+    String v = option(args, RECORD_ARGUMENT);
+    return v == null ? Optional.empty() : Optional.of(Paths.get(v));
+  }
+
+  private static String option(String[] args, String name) {
+    for (int i = 0; i + 1 < args.length; i++) if (name.equals(args[i])) return args[i + 1];
+    return null;
+  }
+
+  /**
+   * Records the replay with the game's art (the realistic view) to a video or a still, offscreen:
+   * {@code --record out.mp4 [--size 1080x1920] [--fps 60] [--from seconds] [--seconds n] [--bottom
+   * 0|1] [--location PvP_royal]}.
+   */
+  private static void record(ReplayFile replay, GameTables tables, String[] args) {
+    String size = Optional.ofNullable(option(args, "--size")).orElse("1080x1920");
+    String[] wh = size.split("x");
+    int fps = Integer.parseInt(Optional.ofNullable(option(args, "--fps")).orElse("60"));
+    float from = Float.parseFloat(Optional.ofNullable(option(args, "--from")).orElse("0"));
+    float seconds = Float.parseFloat(Optional.ofNullable(option(args, "--seconds")).orElse("600"));
+    int bottom = Integer.parseInt(Optional.ofNullable(option(args, "--bottom")).orElse("0"));
+    String location = option(args, "--location");
+    if (location != null) System.setProperty("crforge.art.location", location);
+    var settings =
+        new org.crforge.desktop.render.art.CinematicRecorder.Settings(
+            recordArgument(args).get(),
+            Integer.parseInt(wh[0]),
+            Integer.parseInt(wh[1]),
+            fps,
+            from,
+            seconds,
+            bottom);
+    Lwjgl3ApplicationConfiguration config = new Lwjgl3ApplicationConfiguration();
+    config.setTitle("CRForge - recording");
+    config.setWindowedMode(320, 240);
+    config.setInitialVisible(false);
+    config.useVsync(false);
+    config.setForegroundFPS(0);
+    new Lwjgl3Application(
+        new org.crforge.desktop.render.art.CinematicRecorder(replay, tables, settings), config);
   }
 }

@@ -1,0 +1,272 @@
+/*
+ * crforge - https://github.com/voonhous/crforge
+ * SPDX-License-Identifier: Apache-2.0
+ * Porting this code? Please cite this file and the commit you read: see the README.
+ */
+
+package org.crforge.desktop.render.art;
+
+import com.badlogic.gdx.ApplicationAdapter;
+import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.graphics.GL20;
+import com.badlogic.gdx.graphics.OrthographicCamera;
+import com.badlogic.gdx.graphics.Pixmap;
+import com.badlogic.gdx.graphics.PixmapIO;
+import com.badlogic.gdx.graphics.glutils.FrameBuffer;
+import com.badlogic.gdx.utils.BufferUtils;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import lombok.extern.slf4j.Slf4j;
+import org.crforge.core.battle.data.GameTables;
+import org.crforge.desktop.battle.BattleAdapter;
+import org.crforge.desktop.battle.BattleFrame;
+import org.crforge.desktop.battle.BattleSession;
+import org.crforge.desktop.render.ViewOrientation;
+import org.crforge.desktop.replay.ReplayFile;
+import org.crforge.desktop.replay.ReplayPlayer;
+
+/**
+ * Plays a replay with the game's art into an offscreen frame and writes it as a video (through
+ * ffmpeg) or, for a {@code .png} target, as one still. Each battle tick (50 ms) is drawn as {@code
+ * fps / 20} frames interpolated between the tick before and the tick.
+ */
+@Slf4j
+public final class CinematicRecorder extends ApplicationAdapter {
+
+  /** What to record. */
+  public record Settings(
+      Path out, int width, int height, int fps, float fromSeconds, float seconds, int bottomSide) {}
+
+  private static final int TICKS_PER_SECOND = 20;
+
+  private final ReplayFile replay;
+  private final GameTables tables;
+  private final Settings settings;
+
+  private ArtCache cache;
+  private ArenaScene arena;
+  private RealisticRenderer renderer;
+  private BattleHud hud;
+  private FrameBuffer fbo;
+  private OrthographicCamera camera;
+  private ReplayPlayer player;
+  private ViewOrientation view;
+  private ArtProjection proj;
+  private Process ffmpeg;
+  private OutputStream video;
+  private ByteBuffer pixels;
+  private byte[] row;
+  private BattleFrame previous;
+  private BattleFrame current;
+  private int subFrame;
+  private int framesWritten;
+  private int framesWanted;
+  private boolean still;
+
+  public CinematicRecorder(ReplayFile replay, GameTables tables, Settings settings) {
+    this.replay = replay;
+    this.tables = tables;
+    this.settings = settings;
+  }
+
+  @Override
+  public void create() {
+    cache =
+        ArtCache.locate()
+            .orElseThrow(
+                () -> new IllegalStateException("no game art cache: run tools/game-art first"));
+    renderer = new RealisticRenderer(cache);
+    int w = settings.width();
+    int h = settings.height();
+    fbo = new FrameBuffer(Pixmap.Format.RGBA8888, w, h, false);
+    camera = new OrthographicCamera(w, h);
+    camera.setToOrtho(false, w, h);
+    player = new ReplayPlayer(replay, tables);
+    BattleSession session = player.getSession();
+    if (session == null) throw new IllegalStateException("the replay cannot be played");
+    var tileMap = session.getBattle().getWorld().getTileMap();
+    view = ViewOrientation.of(tileMap, settings.bottomSide());
+    // the arena (with its art's border) fills the width; the hand sits below it
+    float pixelsPerTile = w / 20.5f;
+    float arenaHeight =
+        tileMap.heightUnits()
+            / 1000f
+            * pixelsPerTile
+            * ArtProjection.DU_PER_TILE_Y
+            / ArtProjection.DU_PER_TILE_X;
+    float originX = (w - tileMap.widthUnits() / 1000f * pixelsPerTile) / 2f;
+    float originY = (h - arenaHeight) / 2f + h * 0.035f;
+    proj =
+        new ArtProjection(
+            pixelsPerTile, originX, originY, tileMap.widthUnits(), tileMap.heightUnits());
+    arena = new ArenaScene(cache, tables, replay);
+    hud = new BattleHud(cache, renderer.drawer());
+
+    // fast-forward to the start
+    int startTick = Math.round(settings.fromSeconds() * TICKS_PER_SECOND);
+    while (session.tick() < startTick && player.step()) {
+      player.drainAreaHits();
+    }
+    current = BattleAdapter.frame(player.getSession(), view::sideName);
+    previous = current;
+    still = settings.out().toString().toLowerCase().endsWith(".png");
+    framesWanted = still ? 1 : Math.round(settings.seconds() * settings.fps());
+    pixels = BufferUtils.newByteBuffer(w * h * 4);
+    row = new byte[w * 4];
+    if (!still) startEncoder();
+    log.info(
+        "Recording {} frame(s) {}x{} at {} fps from {}s to {}",
+        framesWanted,
+        w,
+        h,
+        settings.fps(),
+        settings.fromSeconds(),
+        settings.out());
+  }
+
+  private void startEncoder() {
+    List<String> cmd = new ArrayList<>();
+    cmd.addAll(
+        List.of(
+            "ffmpeg",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgba",
+            "-s",
+            settings.width() + "x" + settings.height(),
+            "-r",
+            Integer.toString(settings.fps()),
+            "-i",
+            "-",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "17",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            settings.out().toString()));
+    try {
+      ffmpeg =
+          new ProcessBuilder(cmd)
+              .redirectErrorStream(true)
+              .redirectOutput(ProcessBuilder.Redirect.INHERIT)
+              .start();
+      video = ffmpeg.getOutputStream();
+    } catch (IOException e) {
+      throw new IllegalStateException("cannot start ffmpeg", e);
+    }
+  }
+
+  @Override
+  public void render() {
+    int perTick = Math.max(1, settings.fps() / TICKS_PER_SECOND);
+    for (int batchFrames = 0; batchFrames < 8 && framesWritten < framesWanted; batchFrames++) {
+      if (!still && subFrame == 0 && framesWritten > 0) {
+        previous = current;
+        if (!player.step()) {
+          framesWanted = framesWritten;
+          break;
+        }
+        current = BattleAdapter.frame(player.getSession(), view::sideName);
+      }
+      float alpha = still ? 1f : (subFrame + 1f) / perTick;
+      drawFrame(alpha);
+      subFrame = (subFrame + 1) % perTick;
+      framesWritten++;
+      if (framesWritten % (settings.fps() * 5) == 0) {
+        log.info("{} / {} frames (tick {})", framesWritten, framesWanted, current.tick());
+      }
+    }
+    if (framesWritten >= framesWanted) finish();
+  }
+
+  private void drawFrame(float alpha) {
+    fbo.begin();
+    Gdx.gl.glClearColor(0.11f, 0.13f, 0.12f, 1f);
+    Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
+    Gdx.gl.glEnable(GL20.GL_BLEND);
+    camera.update();
+    renderer.drawer().batch().setProjectionMatrix(camera.combined);
+    arena.drawGround(renderer.drawer(), proj, view, current, previous, alpha);
+    renderer.render(current, previous, alpha, tables, view, proj, camera.combined);
+    arena.drawOverlay(renderer.drawer(), proj, view, current, alpha);
+    hud.draw(current, view, proj, settings.width(), settings.height(), camera.combined);
+    pixels.clear();
+    Gdx.gl.glPixelStorei(GL20.GL_PACK_ALIGNMENT, 1);
+    Gdx.gl.glReadPixels(
+        0, 0, settings.width(), settings.height(), GL20.GL_RGBA, GL20.GL_UNSIGNED_BYTE, pixels);
+    fbo.end();
+    if (still) {
+      writeStill();
+    } else {
+      writeVideoFrame();
+    }
+  }
+
+  private void writeVideoFrame() {
+    int w = settings.width();
+    int h = settings.height();
+    try {
+      // GL rows are bottom-up
+      for (int y = h - 1; y >= 0; y--) {
+        pixels.position(y * w * 4);
+        pixels.get(row, 0, w * 4);
+        for (int i = 3; i < row.length; i += 4) row[i] = (byte) 255;
+        video.write(row);
+      }
+    } catch (IOException e) {
+      throw new IllegalStateException("ffmpeg stopped", e);
+    }
+  }
+
+  private void writeStill() {
+    int w = settings.width();
+    int h = settings.height();
+    Pixmap pm = new Pixmap(w, h, Pixmap.Format.RGBA8888);
+    ByteBuffer dst = pm.getPixels();
+    for (int y = 0; y < h; y++) {
+      pixels.position((h - 1 - y) * w * 4);
+      pixels.get(row, 0, w * 4);
+      for (int i = 3; i < row.length; i += 4) row[i] = (byte) 255;
+      dst.position(y * w * 4);
+      dst.put(row);
+    }
+    dst.rewind();
+    PixmapIO.writePNG(Gdx.files.absolute(settings.out().toAbsolutePath().toString()), pm);
+    pm.dispose();
+  }
+
+  private void finish() {
+    if (video != null) {
+      try {
+        video.close();
+        ffmpeg.waitFor();
+      } catch (IOException | InterruptedException e) {
+        log.warn("ffmpeg: {}", e.getMessage());
+      }
+      video = null;
+    }
+    log.info("Wrote {} frame(s) to {}", framesWritten, settings.out());
+    Gdx.app.exit();
+  }
+
+  @Override
+  public void dispose() {
+    if (fbo != null) fbo.dispose();
+    if (renderer != null) renderer.dispose();
+    if (cache != null) cache.dispose();
+    if (hud != null) hud.dispose();
+  }
+}
