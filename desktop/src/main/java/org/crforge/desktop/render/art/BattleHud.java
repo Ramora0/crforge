@@ -158,6 +158,16 @@ public final class BattleHud implements Disposable {
     this.lookup = new VisualLookup(cache);
   }
 
+  private RealisticRenderer units;
+
+  /**
+   * The renderer whose units' heights off the ground (a leap, a jump over the river) the bars rise
+   * with; null for none.
+   */
+  public void setUnits(RealisticRenderer units) {
+    this.units = units;
+  }
+
   /** The tables the units' rows are read from (bar classes, offsets, card icons). */
   public void setTables(GameTables tables) {
     if (this.tables != tables) {
@@ -324,7 +334,6 @@ public final class BattleHud implements Disposable {
     for (EntityView e : frame.entities()) {
       if (!e.isCharacter() || !e.hasHitPoints()) continue;
       if (e.bar() == EntityView.Bar.NONE || e.deploying() || e.hidden()) continue;
-      if (e.state() == 12 || e.state() == 13) continue; // carried by another unit
       // a destroyed crown tower is its ruin: no bar (the king stays listed at 0 after the end)
       if (e.kind() == EntityView.Kind.TOWER && e.hitPoints() <= 0) continue;
       list.add(e);
@@ -380,6 +389,7 @@ public final class BattleHud implements Disposable {
     float ground = p.y(view, gy);
     VisualLookup.Unit unit = lookup.unit(e.name(), blue);
     if (e.air() && unit != null) ground += p.height(unit.flyingHeight);
+    else if (units != null) ground += p.height(units.groundHeight(e.id(), alpha));
     float topDu = place != null ? place.topDu() : -60f;
     float offset = place != null ? (blue ? place.offsetBlue() : place.offsetRed()) : -10f;
     float barDu = topDu + offset;

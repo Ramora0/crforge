@@ -156,18 +156,19 @@ Examples, using direction 1 of the blue export:
 | 0 | STANDING | `idle1`, looped |
 | 1, 6, 7, 15 | MOVING, SPAWN_PATHFIND, INGAME_PATHFIND, ROUTE_FOLLOWING_ALTERNATE | `run1`, looped at native fps. If `speed == 0` for the tick, draw `idle1`, unless the row has `DontStopMoveAnim` (Golem, Ice Golem): keep `run1` |
 | 2 | ATTACKING | `attack<k>`, timed to the hit (§1.4). Between hits, after the clip ends: `idle1`. If `AnimationsKeepLastFrame` is set: hold the last attack frame |
-| 3 | DASHING | `dash1` if present, else `charge1` if present, else `run1` |
+| 3 | DASHING | a leap (row `JumpHeight` > 0 and a `jump1` clip: Mega Knight, its evolution): `jump1` timed to the dash (§1.6); else `dash1` (chained dashes take `dash1`…`dash4` in turn), else `charge1`, else `run1` |
 | 4, 11, 8 | DEPLOYING, WAITING_TO_DEPLOY, CLONE_SETUP | `deploy1` if present, stretched over `DeployTime` (row `DeployAnimationOverride` names another action, e.g. `_reborn1_`); else `idle1`, with the deploy base animation under it (§8). WAITING_TO_DEPLOY units are not visible yet in the game (GUESS: draw nothing until DEPLOYING) |
-| 5 | JUMPING | `jump1` if present. Map the jump's progress onto `jump_start`…`jump_end`. Else `run1` |
+| 5 | JUMPING | `jump1` if present (Royal Hogs), its landing frame `action_frame1` at the landing (§1.6); else `run1`. Lifted by the core's arc either way |
 | 10, 16 | CASTING, ABILITY_FOLLOW_UP | `ability1` if present (or the row's `CustomAnimationPostfix`), else `idle1` |
 | 9 | MORPHING | `idle1` |
-| 12, 13 | FOLLOWING_REMOVED(_BUILDING) | do not draw. The entity is carried by another one, e.g. a building's rider |
-| 14 | COMPONENTS_DISABLED | `idle1` |
+| 12, 13 | FOLLOWING_REMOVED(_BUILDING) | only the Fisherman's hook sets them (`ProjectileFlight`): a troop it pulls (12) is drawn `idle1` where the hook has it, with its bar; a Fisherman it drags to a building (13) as in 14 |
+| 14 | COMPONENTS_DISABLED | the Fisherman held while his hook pulls: `loading1`'s `pull_start`…`pull_end` at the clip's rate, held on its last frame; else `idle1` |
 | -1 | any non-character | n/a |
 
 Two further rules apply to every state:
 
-- A charging unit (Prince, Dark Prince, Ram) uses `charge1` instead of `run1` while its charge is active. The view does not expose that today; it would need a `charging` flag.
+- A charging unit (Prince, Dark Prince, Battle Ram, Ram Rider's Ram, evolved Royal Recruits) uses `charge1` instead of `run1` once its charge is complete (`chargeProgress` ≥ 10000, read through `BattleAdapter.unitMotion`), until the charge is lost.
+- A unit winding up a dash (`dashWindupMs` > 0: Bandit, Mega Knight, …) stands: `idle1`, or the crouch of its `jump1` (§1.6).
 - A stunned or frozen unit (`statuses` STUNNED/FROZEN) holds its current frame: playback rate 0.
 
 **Evidence.**
@@ -233,6 +234,37 @@ To implement this, add `attackTimerMs`, `hitSpeedMs` (the effective one) and `at
 - Loop `run1` and `idle1` at the clip fps. **DATA** (fps); INFERRED (looping).
 - `run1` labels `action_frame1` and `action_frame2` are the two footfalls, about half a cycle apart. That is where `MoveEffect` (e.g. `knight_steps`: dust particles and a step sound, Layer Ground) is played.
 - Fixed-rate playback looks right. The Knight covers 0.87 tiles per run cycle at Speed 60 (1 tile/s). Scaling the rate by the unit's current speed share keeps slows and rage consistent. That scaling is a GUESS.
+
+### 1.6 Dashes, leaps, river jumps and charges
+
+**What the core gives (DATA, read-only through `BattleAdapter.unitMotion`).** Per character: its live height `z + heightOffset` (`GridEntity.getZTotal`), the dash time left, the charge progress, the dash wind-up left and the landing hold. The renderer reads them each tick in its `WorldObserver.afterPostHooks` and interpolates the height between the last two ticks; the effect layer listens to `dashStarted`, `dashLanded`, `movementStateRequested` (JUMPING → other: a river jump landing) and `chargeCompleted`.
+
+- **Leap (Mega Knight).** The wind-up runs `DashCooldown` (900 ms) with the unit still, then DASHING for `DashConstantTime` (800 ms) in the air, then a landing hold, still DASHING, until it walks (`DashLandingTime` 300: the hold reads 100…250, about 200 ms). The core's height profile is piecewise linear: 2/3 of `JumpHeight` at a quarter of the constant time, `JumpHeight` (3000) at half, 2/3 at three quarters, 0 at the end (`RouteFollower.dashVisit`). The example replay's red Mega Knight leaps at 13.40, 15.60, 86.70, 88.60 and 90.50 s (battle ticks 268, 312, 1734, 1772, 1810).
+- **River jump (Hog Rider, Prince, Dark Prince, Ram, Royal Hogs, …, `JumpEnabled`).** JUMPING while it crosses water at `JumpSpeed` (game units per tick); the arc `(p − p²/64) · JumpHeight / 16` (`p` up to 32) is sampled into the height offset, peaking at about `JumpHeight` (4000) on a long jump (`RouteFollower.jumpVisit`). Speed during both is `JumpSpeed` (DATA, `SpeedBudget`).
+
+**Drawing (§3.4 for the factor).**
+
+| What | Rule | Confidence |
+|---|---|---|
+| Lift | the sprite at the ground point raised by the core's height × `ArtProjection.DU_PER_HEIGHT_UNIT` (as flying units and projectiles); the shadow stays at the ground point; the bar rises with it. A rider attached to a mount takes its mount's height | the height is DATA, the factor INFERRED (§3.4). A hog's 4000 lifts it 70 du, higher than a Balloon flies (52 du): check against a capture |
+| Layer | a ground unit off the ground is drawn on the air layer, over the ground units it passes | INFERRED (the core moves it off the ground layer for contact, `GridEntity.getZTotal`) |
+| Mega Knight `jump1` (85 f @60: `charge_start` 0, `charge_end` 13, `jump_start` 14, `jump_end` 53, `recover_start` 54, `recover_end` 84) | the crouch (0–13) at the clip's rate over the last 233 ms of the wind-up (idle before); the flight (14–53) stretched over `DashConstantTime`; the recover (54–84) stretched over the landing hold. The evolution's 30 fps clip is stretched the same way | labels DATA; mapping INFERRED from the labels and the columns; the crouch's placement at the wind-up's end is a GUESS |
+| `dash1` (Bandit, Boss Bandit, Golden Knight, the Little Prince's guard) | from the dash's start at the clip's rate. The Golden Knight's chained dashes take `dash1`…`dash4` in turn by the chain's count (`chainDashed`) | INFERRED; the turn order is a GUESS |
+| Royal Hogs' `jump1` (35 f @60, `action_frame1` 29) | played so `action_frame1` comes as the jump lands: duration = jump distance / `JumpSpeed` ticks | INFERRED (the label as the landing) |
+| Evolved Royal Hogs' `landing1` | once, after the jump ends | GUESS |
+| `charge1` | while the charge is complete (above) | INFERRED (state and column names) |
+
+**Effects (`EffectLayer`, sounds into the sounds file as other unit effects).**
+
+| Column | When | Example | Confidence |
+|---|---|---|---|
+| `DashStartEffect` | at the dash's start (`dashStarted`), where the unit stood | `mega_knight_dash_start`: `card_legendary_mega_knight_charge` and the `assassin_buff` glow | INFERRED: the evolution's `vfx_megaknight_evo_dash_start` has parts at `Time` 800 = `DashConstantTime`, the landing, so the effect starts at the leap |
+| `DashEffect` | at the dash's start, following the unit (`FollowParent`) until it lands | `mega_knight_dashing` (a sound), `assassin_dashing` (a ground trail) | INFERRED |
+| `LandingEffect` | at a dash's landing (`dashLanded`) and a river jump's (JUMPING → other) | `mega_knight_dash_end` (`mega_knight_deploy_compile` at 25 %, `ShakeScreen` 350), `hog_rider_landing` | DATA (core events); the column on the `JumpEnabled` rows ties it to the jump |
+| `DashFilter` | on the unit's sprite from the dash's start while it is DASHING (cut when it walks) | `filter_mega_knight_jump` (90 f @60: alpha pulsing 1 → 0.6, then from frame 50 a ±1 du jitter), `filter_bandit_charge` (60 f) | the clips are DATA. Starting at the dash is INFERRED: the Mega Knight's jitter starts at frame 50 (833 ms), as it lands (800 ms). It makes the Mega Knight translucent in the air; confirm against a capture |
+| `ChargeEffect` | when the charge completes (`chargeCompleted`), following the unit; its `Filter` component (`filter_protection`) on the unit | `prince_charge`: dust, `card_epic_prince_charge`, the `effect_charge` badge | INFERRED |
+
+**Not handled.** The Fisherman's throw (`loading1` `throw_*`): his special shows `attack1`. The Mega Knight evolution's and the Golden Knight's art was not checked in a recording (no battle had them). `AttackDashTime` (Bats) is a lunge inside the attack, not a state. The Royal Ghost, Mini P.E.K.K.A, Monk and Mighty Miner have no dash or jump state (the Monk's and the Mighty Miner's abilities are CASTING, §1.3); the Goblin Barrel is a projectile (§6).
 
 ---
 
@@ -890,7 +922,7 @@ The game's 3D attenuation, buses' snapshots and ducking are not in the parsed da
 | Field | Source in core | For |
 |---|---|---|
 | `attackTimerMs`, effective `hitSpeedMs`, `attackSequenceIndex` | `TargetingState.getAttackTimerMs()`, `TargetingConfig.hitSpeed()`, `getAttackSequenceIndex()` | lining attack clips up with hits (§1.4), `attack2`/`attack3` |
-| charging flag | the charge component | `charge1` (§1.3) |
+| height, dash time, charge progress, dash wind-up, landing hold (done: `BattleAdapter.unitMotion`, read by the renderer's observer) | `GridEntity.getZTotal()`, `MovementState`, `TargetingState.getDashWindupMs()`, `getBlockCountdownMs()` | lift, `jump1`/`charge1` timing (§1.6) |
 | projectile `z`, `startX/Y`, `aimZ` | `ProjectileEntity.getZ()`, `getStartX/Y/Z()` | arc height, frame choice, shadow (§6) |
 | king activation phase + elapsed ms | `ActivationEvent` in `TowerEntity` | the King tower clip (§5.2) |
 | per-tick events: hit landed (attacker → target), death, projectile launch and impact, spawn | battle events, or the renderer diffs frames | effects (§7), damage filter (§8) |
@@ -910,3 +942,4 @@ The game's 3D attenuation, buses' snapshots and ducking are not in the parsed da
 11. **Particle emitters** are about 70% of effect components. Without an emitter, most hit, death and trail visuals are missing. The SWF-only parts (stuck arrows, spell rings, zap bolts) are the cheap wins.
 12. **Not done:** the Training Camp decoration pass was not composited; only its ground pads were measured. The ruin exports were not rendered. Hero, evo and `sc3d`-only art was not examined beyond confirming that SC2 fallbacks exist.
 13. **Lava Pups' glow.** Each `chr_lava_pups.sc` clip draws over the body a glow (shape 1, a 24 du soft disc scaled about 2.3×, covering the whole pup) with blend 8 (add) and the colour transform `mul (18, 18, 18)`, `alpha 187`, `add (255, 255, 151)`: a pale-yellow additive wash at 0.73 that turns the orange-brown body yellow-orange. The transform's byte order is DATA (identity is `255,255,255,a,0,0,0` 343 times in `effects.sc`, and `filter_cold` is a blue add), and the drawer applies it as Flash does (`rgb·mul + add·a`, then added). So the bright pups are drawn as the data says; whether the game's shader treats an additive child's added colour differently is unverified.
+14. **Dashes and jumps (§1.6).** Check against a capture: whether the Mega Knight is translucent in the air (its `DashFilter`'s alpha) or the filter belongs to the wind-up; where its crouch falls; the river jump's height (4000 game units lift a hog 70 du); and the dash clips' turn order on the Golden Knight.

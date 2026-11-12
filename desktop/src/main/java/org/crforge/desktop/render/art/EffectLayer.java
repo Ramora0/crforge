@@ -267,6 +267,7 @@ public final class EffectLayer {
       if (frame.tick() > 0 && ruins.isEmpty()) ruinsOfMissingTowers(frame, view);
       // what the observer heard before the first frame (a fast-forward) is not replayed
       events.clear();
+      motions.clear();
       struck.clear();
       targetFilters.clear();
       activations.clear();
@@ -339,6 +340,7 @@ public final class EffectLayer {
     footsteps(frame, before, view, now);
     flashes(after, view, now);
     kingActivations(after, view, now);
+    dashes(after, view, now);
     if (TEST != null) testEffects(frame.tick(), view, now);
     events.clear();
     spawnedBy.keySet().retainAll(after.keySet());
@@ -347,6 +349,105 @@ public final class EffectLayer {
     shakes.removeIf(s -> now - s[0] > shakeLength(s[1]) + 0.1);
     damageFlash.values().removeIf(f -> now - f.start() > 3);
     targetFlash.values().removeIf(f -> now - f.start() > 3);
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // dashes, jumps and charges (DashStartEffect, DashEffect, LandingEffect, DashFilter,
+  // ChargeEffect)
+
+  /** A dash, jump or charge moment the battle reported, with where the unit stood. */
+  private record Motion(Kind kind, int id, String name, int side, int x, int y) {
+    enum Kind {
+      DASH_START,
+      DASH_LANDED,
+      JUMP_LANDED,
+      CHARGED
+    }
+  }
+
+  private final List<Motion> motions = new ArrayList<>();
+
+  /** Each dashing unit's {@code DashEffect}, which follows it until it lands. */
+  private final Map<Integer, Instance> dashEffects = new HashMap<>();
+
+  /** Each dashing unit's {@code DashFilter}, played on it from the dash's start while it dashes. */
+  private final Map<Integer, Flash> dashFilters = new HashMap<>();
+
+  private void motion(
+      Motion.Kind kind, org.crforge.core.battle.unit.CharacterEntity unit, int x, int y) {
+    if (unit == null || unit.getData() == null || motions.size() > 2000) return;
+    motions.add(new Motion(kind, unit.getId(), unit.getData().name(), unit.side(), x, y));
+  }
+
+  /**
+   * Plays what a dash, a river jump and a charge show (§1.6): at a dash's start (the wind-up run
+   * out, the unit leaving the ground) its row's {@code DashStartEffect} where it stood, its {@code
+   * DashEffect} following it until it lands and its {@code DashFilter} on its sprite while it is
+   * dashing; at the landing, of a dash or of a jump over the river, its {@code LandingEffect}; when
+   * a charge completes, its {@code ChargeEffect} (dust, sound, the {@code effect_charge} badge)
+   * with the effect's filter on the unit.
+   */
+  private void dashes(Map<Integer, EntityView> after, ViewOrientation view, double now) {
+    for (Motion m : motions) {
+      GameRow row = character(m.name());
+      if (row == null) continue;
+      boolean red = !view.blue(m.side());
+      switch (m.kind()) {
+        case DASH_START -> {
+          play(text(row, "DashStartEffect"), red, now, m.x(), m.y(), -1, 1f, 0);
+          endDashEffect(m.id(), now);
+          Instance in = playFollowing(text(row, "DashEffect"), red, now, m.x(), m.y(), m.id());
+          if (in != null) dashEffects.put(m.id(), in);
+          String filter = text(row, "DashFilter");
+          if (filter != null) dashFilters.put(m.id(), new Flash("sc/effects.sc", filter, now));
+        }
+        case DASH_LANDED, JUMP_LANDED -> {
+          endDashEffect(m.id(), now);
+          play(text(row, "LandingEffect"), red, now, m.x(), m.y(), -1, 1f, 0);
+        }
+        case CHARGED -> {
+          EntityView e = after.get(m.id());
+          int x = e == null ? m.x() : e.x(), y = e == null ? m.y() : e.y();
+          EffectDefs.Effect fx = defs.effect(text(row, "ChargeEffect"), red);
+          if (fx == null) continue;
+          playFollowing(text(row, "ChargeEffect"), red, now, x, y, m.id());
+          for (EffectDefs.Filter f : fx.filters()) {
+            targetFlash.put(m.id(), new Flash(f.file(), f.export(), now + f.delay()));
+          }
+        }
+      }
+    }
+    motions.clear();
+    // the dash filter lasts while the unit dashes
+    dashFilters
+        .keySet()
+        .removeIf(
+            id -> {
+              EntityView e = after.get(id);
+              return e == null || e.state() != org.crforge.core.pathfinding.GridEntityState.DASHING;
+            });
+    dashEffects.keySet().removeIf(id -> !after.containsKey(id));
+  }
+
+  private void endDashEffect(int id, double now) {
+    Instance in = dashEffects.remove(id);
+    if (in != null && !in.ownerGone) {
+      in.ownerGone = true;
+      in.ownerGoneAt = now;
+    }
+  }
+
+  /**
+   * Plays an effect whose anchor follows its unit ({@code FollowParent}) until the unit is gone.
+   */
+  private Instance playFollowing(String name, boolean red, double now, int gx, int gy, int id) {
+    EffectDefs.Effect fx = defs.effect(name, red);
+    if (fx == null) return null;
+    queueSounds(fx, now);
+    if (!fx.drawable()) return null;
+    Instance in = new Instance(fx, now, gx, gy, id, 1f, 0, red);
+    add(in);
+    return in;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -605,14 +706,30 @@ public final class EffectLayer {
    * colour (0..1, straight) is added to it (ScDrawer's {@code u_add}).
    */
   public float[] damageFilter(int entityId, float seconds) {
-    if (damageFlash.isEmpty() && targetFlash.isEmpty()) return null;
+    if (damageFlash.isEmpty() && targetFlash.isEmpty() && dashFilters.isEmpty()) return null;
     double t = clockAt(seconds);
     float[] d = sample(damageFlash.get(entityId), t);
     float[] w = sample(targetFlash.get(entityId), t);
-    if (d == null) return w;
-    if (w == null) return d;
-    for (int i = 7; i < 10; i++) d[i] = Math.min(1f, d[i] + w[i]);
-    return d;
+    if (d == null) d = w;
+    else if (w != null) for (int i = 7; i < 10; i++) d[i] = Math.min(1f, d[i] + w[i]);
+    float[] dash = sample(dashFilters.get(entityId), t);
+    if (dash == null) return d;
+    return d == null ? dash : compose(dash, d);
+  }
+
+  /** Filter {@code outer} applied over {@code inner}: matrices composed, colours combined. */
+  static float[] compose(float[] outer, float[] inner) {
+    float[] o = new float[13];
+    o[0] = outer[0] * inner[0] + outer[2] * inner[1];
+    o[1] = outer[1] * inner[0] + outer[3] * inner[1];
+    o[2] = outer[0] * inner[2] + outer[2] * inner[3];
+    o[3] = outer[1] * inner[2] + outer[3] * inner[3];
+    o[4] = outer[0] * inner[4] + outer[2] * inner[5] + outer[4];
+    o[5] = outer[1] * inner[4] + outer[3] * inner[5] + outer[5];
+    o[6] = outer[6] * inner[6];
+    for (int i = 7; i < 10; i++) o[i] = Math.min(1f, outer[i] + inner[i]);
+    for (int i = 10; i < 13; i++) o[i] = outer[i] * inner[i];
+    return o;
   }
 
   private float[] sample(Flash f, double t) {
@@ -959,6 +1076,43 @@ public final class EffectLayer {
         WorldEntity t = r.target(), v = r.struck();
         reflects.add(
             new Reflect(t.getId(), v.getId(), t.side(), t.x(), t.y(), v.x(), v.y(), r.buff()));
+      }
+
+      @Override
+      public void dashStarted(
+          int tick,
+          org.crforge.core.battle.unit.CharacterEntity unit,
+          org.crforge.core.pathfinding.target.TargetView reference,
+          int fromX,
+          int fromY,
+          int aimX,
+          int aimY) {
+        motion(Motion.Kind.DASH_START, unit, fromX, fromY);
+      }
+
+      @Override
+      public void dashLanded(
+          int tick,
+          org.crforge.core.battle.unit.CharacterEntity unit,
+          WorldEntity hit,
+          int damage,
+          boolean area) {
+        if (unit != null) motion(Motion.Kind.DASH_LANDED, unit, unit.x(), unit.y());
+      }
+
+      @Override
+      public void movementStateRequested(
+          int tick, org.crforge.core.battle.unit.CharacterEntity unit, int from, int to) {
+        int jumping = org.crforge.core.pathfinding.GridEntityState.JUMPING;
+        if (unit != null && from == jumping && to != jumping) {
+          motion(Motion.Kind.JUMP_LANDED, unit, unit.x(), unit.y());
+        }
+      }
+
+      @Override
+      public void chargeCompleted(
+          int tick, org.crforge.core.battle.unit.CharacterEntity unit, int progress) {
+        if (unit != null) motion(Motion.Kind.CHARGED, unit, unit.x(), unit.y());
       }
 
       @Override

@@ -43,6 +43,7 @@ public final class RealisticView implements Disposable {
     this.renderer = new RealisticRenderer(cache);
     this.effects = new EffectLayer(cache);
     this.hud = new BattleHud(cache, renderer.drawer());
+    this.hud.setUnits(renderer);
     renderer.setEffects(effects);
   }
 

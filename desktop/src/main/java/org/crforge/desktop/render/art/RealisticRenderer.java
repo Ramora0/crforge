@@ -61,6 +61,17 @@ public final class RealisticRenderer implements Disposable {
   /** The tick each king tower's activating run started, by entity id. */
   private final Map<Integer, Integer> kingWoke = new HashMap<>();
 
+  /**
+   * Each character's motion ({@code BattleAdapter.unitMotion}: height, dash time, charge, dash
+   * wind-up, landing hold) after the last tick and the tick before it, by entity id.
+   */
+  private Map<Integer, int[]> motions = Map.of();
+
+  private Map<Integer, int[]> motionsBefore = Map.of();
+
+  /** The dashes a chained dash (the Golden Knight's) has made, by entity id. */
+  private final Map<Integer, Integer> dashLinks = new HashMap<>();
+
   /** Tells the renderer when each king tower starts waking (its clip's activation frames). */
   public org.crforge.core.battle.unit.WorldObserver observer() {
     return new org.crforge.core.battle.unit.WorldObserver() {
@@ -73,7 +84,55 @@ public final class RealisticRenderer implements Disposable {
           kingWoke.putIfAbsent(king.getId(), tick);
         }
       }
+
+      @Override
+      public void afterPostHooks(
+          int tick,
+          List<org.crforge.core.battle.unit.WorldEntity> present,
+          List<org.crforge.core.battle.projectile.ProjectileEntity> projectiles) {
+        Map<Integer, int[]> m = new HashMap<>();
+        for (var w : present) {
+          if (w instanceof org.crforge.core.battle.unit.CharacterEntity c) {
+            int[] v = org.crforge.desktop.battle.BattleAdapter.unitMotion(c);
+            if (v != null) m.put(c.getId(), v);
+          }
+        }
+        motionsBefore = motions;
+        motions = m;
+      }
+
+      @Override
+      public void chainDashed(
+          int tick,
+          org.crforge.core.battle.unit.CharacterEntity unit,
+          org.crforge.core.battle.unit.WorldEntity next,
+          int count,
+          int x,
+          int y) {
+        if (unit != null) dashLinks.put(unit.getId(), count);
+      }
+
+      @Override
+      public void chainDashEnded(
+          int tick,
+          org.crforge.core.battle.unit.CharacterEntity unit,
+          int count,
+          org.crforge.core.pathfinding.target.TargetView reference) {
+        if (unit != null) dashLinks.remove(unit.getId());
+      }
     };
+  }
+
+  /**
+   * A ground character's height above the ground this frame, game units: the core's live height (a
+   * dash's height profile, a river jump's arc) interpolated between the last two ticks.
+   */
+  public float groundHeight(int id, float tickAlpha) {
+    int[] now = motions.get(id);
+    if (now == null) return 0f;
+    int[] before = motionsBefore.get(id);
+    float z0 = before == null ? now[0] : before[0];
+    return Math.max(0f, z0 + (now[0] - z0) * tickAlpha);
   }
 
   private final Color shadowColor = new Color(0f, 0f, 100 / 255f, 0.5f);
@@ -135,6 +194,9 @@ public final class RealisticRenderer implements Disposable {
     float deployStart = -1;
     float activatedAt = -1;
     int heldFrame;
+    int state = -1;
+    float stateStart;
+    float jumpEnd = -1;
   }
 
   /** One clip to draw this frame. */
@@ -236,11 +298,9 @@ public final class RealisticRenderer implements Disposable {
       float tickAlpha,
       ViewOrientation view) {
     int state = e.state();
-    if (state == GridEntityState.WAITING_TO_DEPLOY
-        || state == GridEntityState.FOLLOWING_REMOVED
-        || state == GridEntityState.FOLLOWING_REMOVED_BUILDING) {
-      return;
-    }
+    // a troop the Fisherman's hook pulls (FOLLOWING_REMOVED) or a Fisherman it drags to a building
+    // (FOLLOWING_REMOVED_BUILDING) is still on the arena, drawn where the hook has it
+    if (state == GridEntityState.WAITING_TO_DEPLOY) return;
     boolean blue = view.blue(e.side());
     VisualLookup.Unit unit = lookup.unit(e.name(), blue);
     if (unit == null) return;
@@ -248,8 +308,11 @@ public final class RealisticRenderer implements Disposable {
     if (e.kind() == EntityView.Kind.TOWER && e.maxHitPoints() > 0 && e.hitPoints() <= 0) return;
     float alpha = e.hidden() ? 0.35f : 1f;
     float scale = proj.pixelsPerDisplayUnit() * unit.scale;
-    float lift = e.air() ? proj.height(unit.flyingHeight) : 0f;
-    int layer = e.air() ? LAYER_AIR : LAYER_GROUND;
+    // a ground unit off the ground (a dash's leap, a jump over the river) is lifted by the core's
+    // height and drawn over the ground units it passes; its shadow stays on the ground
+    float height = e.air() ? 0f : groundHeight(e.id(), tickAlpha);
+    float lift = e.air() ? proj.height(unit.flyingHeight) : proj.height(height);
+    int layer = e.air() || height > 0 ? LAYER_AIR : LAYER_GROUND;
     AnimState st =
         anims.computeIfAbsent(
             e.id() * 4L,
@@ -406,15 +469,74 @@ public final class RealisticRenderer implements Disposable {
     float clipTime = -1; // seconds into the clip when timed to the logic, else looped from start
     float[] filter = null;
     int state = e.state();
+    if (state != st.state) {
+      if (st.state == GridEntityState.JUMPING) st.jumpEnd = seconds;
+      st.state = state;
+      st.stateStart = seconds;
+    }
+    int[] motion = motions.get(e.id());
     switch (state) {
       case GridEntityState.MOVING,
           GridEntityState.SPAWN_PATHFIND,
           GridEntityState.INGAME_PATHFIND,
-          GridEntityState.ROUTE_FOLLOWING_ALTERNATE ->
+          GridEntityState.ROUTE_FOLLOWING_ALTERNATE,
+          GridEntityState.STANDING -> {
+        float windup = motion == null ? 0 : (motion[3] + 50f * (1f - tickAlpha)) / 1000f;
+        float landing = st.jumpEnd < 0 ? -1 : seconds - st.jumpEnd;
+        if (motion != null && motion[3] > 0) {
+          // a dash's wind-up: the unit stands, crouching into a leap at its end (§1.6)
+          float t = unit.has("jump") ? DashArt.windupTime(clipOf(unit, "jump"), windup) : -1;
+          action = t >= 0 ? "jump" : "idle";
+          clipTime = t;
+        } else if (landing >= 0 && unit.has("landing") && landing < clipLength(unit, "landing")) {
+          action = "landing"; // the evolved Royal Hogs' landing after a jump over the river
+          clipTime = landing;
+        } else if (state == GridEntityState.STANDING) {
+          action = "idle";
+        } else {
+          boolean charged = motion != null && motion[2] >= DashArt.CHARGE_COMPLETE;
+          action = charged && unit.has("charge") ? "charge" : "run";
+        }
+      }
+      case GridEntityState.DASHING -> {
+        if (unit.has("jump") && unit.integer("JumpHeight", 0) > 0) {
+          // a leap (Mega Knight): the clip's jump part over the dash's constant time, its recover
+          // part over the landing hold
+          action = "jump";
+          clipTime =
+              DashArt.leapTime(
+                  clipOf(unit, "jump"),
+                  seconds - st.stateStart,
+                  unit.integer("DashConstantTime", 0) / 1000f,
+                  motion == null ? 0 : motion[4] - 50f * (1f - tickAlpha),
+                  unit.integer("DashLandingTime", 0));
+        } else if (unit.has("dash")) {
+          action = DashArt.dashVariant(unit::has, dashLinks.getOrDefault(e.id(), 0));
+        } else {
+          action = unit.has("charge") ? "charge" : "run";
+        }
+      }
+      case GridEntityState.JUMPING -> {
+        if (unit.has("jump")) {
+          // a jump over the river with a clip of its own (Royal Hogs): its landing frame at the
+          // landing, the jump lasting the distance over the jump speed
+          action = "jump";
+          clipTime =
+              DashArt.riverJumpTime(
+                  clipOf(unit, "jump"),
+                  seconds - st.stateStart,
+                  motion == null ? 0 : motion[5],
+                  unit.integer("JumpSpeed", 0));
+        } else {
           action = "run";
-      case GridEntityState.DASHING ->
-          action = unit.has("dash") ? "dash" : unit.has("charge") ? "charge" : "run";
-      case GridEntityState.JUMPING -> action = unit.has("jump") ? "jump" : "run";
+        }
+      }
+      case GridEntityState.COMPONENTS_DISABLED, GridEntityState.FOLLOWING_REMOVED_BUILDING -> {
+        // the Fisherman held while his hook pulls (or drags him): his loading clip's pull
+        float t = DashArt.pullTime(clipOf(unit, "loading"), seconds - st.stateStart);
+        action = t >= 0 ? "loading" : "idle";
+        clipTime = t;
+      }
       case GridEntityState.CASTING, GridEntityState.ABILITY_FOLLOW_UP ->
           action = unit.has("ability") ? "ability" : "idle";
       case GridEntityState.DEPLOYING, GridEntityState.CLONE_SETUP -> {
@@ -484,6 +606,16 @@ public final class RealisticRenderer implements Disposable {
             null,
             sortY,
             layer));
+  }
+
+  private static ScScene.Clip clipOf(VisualLookup.Unit unit, String action) {
+    int id = unit.animation(action, 5);
+    return id < 0 ? null : unit.scene.clip(id);
+  }
+
+  private static float clipLength(VisualLookup.Unit unit, String action) {
+    ScScene.Clip c = clipOf(unit, action);
+    return c == null || c.fps() <= 0 ? 0f : c.frameCount() / (float) c.fps();
   }
 
   /**

@@ -122,6 +122,7 @@ public final class CinematicRecorder extends ApplicationAdapter {
     int[] sh = arena.shadow();
     renderer.setShadowColor(sh[0], sh[1], sh[2], sh[3]);
     hud = new BattleHud(cache, renderer.drawer());
+    hud.setUnits(renderer);
     hud.setTables(tables);
     effects = new EffectLayer(cache);
     renderer.setEffects(effects);

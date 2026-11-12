@@ -188,7 +188,8 @@ final class VisualLookup {
 
   private static void collectAnimations(Unit unit, ScScene scene, String base, String prefix) {
     Pattern p = Pattern.compile("^" + Pattern.quote(base) + "_([A-Za-z]+)(\\d*)_(\\d+)$");
-    // per action, the lowest variant number wins; attack2/attack3 stay separate (attack sequence)
+    // per action, the lowest variant number wins; attack2/attack3 stay separate (attack sequence),
+    // as do dash2..dash4 (the Golden Knight's chained dashes)
     Map<String, Integer> variantOf = new HashMap<>();
     for (Map.Entry<String, Integer> e : scene.exports().entrySet()) {
       Matcher m = p.matcher(e.getKey());
@@ -197,7 +198,8 @@ final class VisualLookup {
       int variant = m.group(2).isEmpty() ? 1 : Integer.parseInt(m.group(2));
       int dir = Integer.parseInt(m.group(3));
       if (dir < 1 || dir > 64) continue;
-      String key = prefix + (action.equals("attack") && variant > 1 ? "attack" + variant : action);
+      boolean numbered = action.equals("attack") || action.equals("dash");
+      String key = prefix + (numbered && variant > 1 ? action + variant : action);
       int v = key.equals(prefix + action) ? variant : 1;
       Integer best = variantOf.get(key);
       if (best != null && v > best) continue;

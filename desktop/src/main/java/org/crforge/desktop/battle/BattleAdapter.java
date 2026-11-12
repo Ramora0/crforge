@@ -115,6 +115,52 @@ public final class BattleAdapter {
     return out;
   }
 
+  /**
+   * Each character's motion off the ground and through a dash, by entity id ({@link #unitMotion}).
+   * Presentation only.
+   */
+  public static java.util.Map<Integer, int[]> unitMotions(BattleSession session) {
+    java.util.Map<Integer, int[]> out = new java.util.HashMap<>();
+    for (BattleEntity entity : session.getBattle().getBattle().getHolder().entities()) {
+      if (entity instanceof CharacterEntity c) {
+        int[] m = unitMotion(c);
+        if (m != null) out.put(c.getId(), m);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * A character's motion off the ground and through a dash: {@code {height, dashTimeMs,
+   * chargeProgress, dashWindupMs, landingHoldMs, jumpDistance}}, or null for one without grid
+   * state. {@code height} is its live height in game units (its own height and the height offset a
+   * jump's samples fold into, as the contact passes read it: a dash's height profile, a river
+   * jump's arc; a rider attached to a unit takes its mount's); {@code dashTimeMs} the time left of
+   * a dash with a constant time; {@code chargeProgress} the charge's progress ({@code -1} for none,
+   * {@code 10000} once charged); {@code dashWindupMs} the wind-up left before a dash; {@code
+   * landingHoldMs} the landing hold run so far after a dash lands (0 for none); {@code
+   * jumpDistance} the length of the last jump over the river. Presentation only: the realistic view
+   * lifts the sprite and times its dash, jump or charge clip by it.
+   */
+  public static int[] unitMotion(CharacterEntity c) {
+    if (c == null || c.getUnit() == null) return null;
+    GridEntity view = c.getView();
+    var movement = c.getUnit().movement();
+    var targeting = c.getUnit().targeting();
+    int height = view.getZTotal();
+    if (c.getParent() != null && c.getParent().getView() != null) {
+      height = Math.max(height, c.getParent().getView().getZTotal());
+    }
+    return new int[] {
+      height,
+      movement == null ? 0 : movement.getDashTimeMs(),
+      movement == null ? -1 : movement.getChargeProgress(),
+      targeting == null ? 0 : targeting.getDashWindupMs(),
+      view.getBlockCountdownMs(),
+      movement == null ? 0 : movement.getJumpTotalDistance()
+    };
+  }
+
   public static BattleFrame frame(BattleSession session) {
     return frame(session, BattleSession::sideName);
   }
