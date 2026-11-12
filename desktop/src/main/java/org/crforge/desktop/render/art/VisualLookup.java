@@ -134,10 +134,16 @@ final class VisualLookup {
     if (row == null) return null;
     String file = RealisticRenderer.text(row, "FileName");
     ScScene scene = cache.scene(file);
-    if (scene == null) return null;
     String base = RealisticRenderer.text(row, blue ? "BlueExportName" : "RedExportName");
     if (base == null || base.isEmpty()) base = RealisticRenderer.text(row, "BlueExportName");
-    if (base == null || base.isEmpty()) return null;
+    if (scene == null || base == null || base.isEmpty()) {
+      // a hero row (TombstoneHero, KnightHero) is drawn by a 3D prefab the art cache lacks: draw
+      // the row it derives from (its Base, e.g. BUILDING.Tombstone) instead
+      String prefab = RealisticRenderer.text(row, "PrefabAsset");
+      String parent = RealisticRenderer.text(row, "Base");
+      if (prefab == null || prefab.isEmpty() || parent == null || parent.isEmpty()) return null;
+      return buildUnit(parent.substring(parent.indexOf('.') + 1), blue, depth + 1);
+    }
     float scale = RealisticRenderer.integer(row, "Scale", 100) / 100f;
     Unit unit = new Unit(scene, row, scale <= 0 ? 1f : scale);
     unit.baseExport = scene.export(base);
