@@ -82,6 +82,85 @@ public final class BattleAdapter {
   }
 
   /** Reads one frame of a session, its messages naming side 0 blue and side 1 red. */
+  /**
+   * Each character's attack timer and attack sequence index, by entity id: {@code {attackTimerMs,
+   * attackSequenceIndex, loadTimerMs}}. Presentation only: the realistic view times its attack
+   * clips by them.
+   */
+  public static java.util.Map<Integer, int[]> attackTimers(BattleSession session) {
+    java.util.Map<Integer, int[]> out = new java.util.HashMap<>();
+    for (BattleEntity entity : session.getBattle().getBattle().getHolder().entities()) {
+      if (entity instanceof WorldEntity unit && unit.getTargeting() != null) {
+        var t = unit.getTargeting();
+        out.put(
+            unit.getId(),
+            new int[] {t.getAttackTimerMs(), t.getAttackSequenceIndex(), t.getLoadTimerMs()});
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Each projectile's flight, by entity id: {@code {z, startX, startY}} (game units). Presentation
+   * only: the realistic view lifts the sprite by z and picks its pitch frame by the share of the
+   * flight done.
+   */
+  public static java.util.Map<Integer, int[]> projectileFlights(BattleSession session) {
+    java.util.Map<Integer, int[]> out = new java.util.HashMap<>();
+    for (BattleEntity entity : session.getBattle().getBattle().getHolder().entities()) {
+      if (entity instanceof ProjectileEntity p) {
+        out.put(p.getId(), new int[] {p.getZ(), p.getStartX(), p.getStartY()});
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Each character's motion off the ground and through a dash, by entity id ({@link #unitMotion}).
+   * Presentation only.
+   */
+  public static java.util.Map<Integer, int[]> unitMotions(BattleSession session) {
+    java.util.Map<Integer, int[]> out = new java.util.HashMap<>();
+    for (BattleEntity entity : session.getBattle().getBattle().getHolder().entities()) {
+      if (entity instanceof CharacterEntity c) {
+        int[] m = unitMotion(c);
+        if (m != null) out.put(c.getId(), m);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * A character's motion off the ground and through a dash: {@code {height, dashTimeMs,
+   * chargeProgress, dashWindupMs, landingHoldMs, jumpDistance}}, or null for one without grid
+   * state. {@code height} is its live height in game units (its own height and the height offset a
+   * jump's samples fold into, as the contact passes read it: a dash's height profile, a river
+   * jump's arc; a rider attached to a unit takes its mount's); {@code dashTimeMs} the time left of
+   * a dash with a constant time; {@code chargeProgress} the charge's progress ({@code -1} for none,
+   * {@code 10000} once charged); {@code dashWindupMs} the wind-up left before a dash; {@code
+   * landingHoldMs} the landing hold run so far after a dash lands (0 for none); {@code
+   * jumpDistance} the length of the last jump over the river. Presentation only: the realistic view
+   * lifts the sprite and times its dash, jump or charge clip by it.
+   */
+  public static int[] unitMotion(CharacterEntity c) {
+    if (c == null || c.getUnit() == null) return null;
+    GridEntity view = c.getView();
+    var movement = c.getUnit().movement();
+    var targeting = c.getUnit().targeting();
+    int height = view.getZTotal();
+    if (c.getParent() != null && c.getParent().getView() != null) {
+      height = Math.max(height, c.getParent().getView().getZTotal());
+    }
+    return new int[] {
+      height,
+      movement == null ? 0 : movement.getDashTimeMs(),
+      movement == null ? -1 : movement.getChargeProgress(),
+      targeting == null ? 0 : targeting.getDashWindupMs(),
+      view.getBlockCountdownMs(),
+      movement == null ? 0 : movement.getJumpTotalDistance()
+    };
+  }
+
   public static BattleFrame frame(BattleSession session) {
     return frame(session, BattleSession::sideName);
   }
@@ -436,7 +515,8 @@ public final class BattleAdapter {
                 card.cost(),
                 session.handCardLevel(side, slot),
                 session.isPending(side, slot),
-                session.cardUnavailableReason(side, slot)));
+                session.cardUnavailableReason(side, slot),
+                formName(matchSide, card, matchSide.getHand().slots()[slot])));
       }
     }
     MatchCard next = session.nextCard(side);
@@ -453,7 +533,18 @@ public final class BattleAdapter {
         next == null
             ? null
             : new BattleFrame.CardView(
-                next.name(), next.cost(), session.nextCardLevel(side), false, "not in hand"),
+                next.name(),
+                next.cost(),
+                session.nextCardLevel(side),
+                false,
+                "not in hand",
+                formName(matchSide, next, matchSide.getHand().queue().get(0))),
         Collections.unmodifiableList(abilities));
+  }
+
+  /** The row a deck card is played as from its slot: its hero row in a hero slot. */
+  private static String formName(MatchSide side, MatchCard card, int deckIndex) {
+    boolean hero = deckIndex >= 0 && (side.slotFlags(deckIndex) & MatchSide.HERO_SLOT) != 0;
+    return hero ? card.formRow(MatchCard.HERO_FORM).name() : card.name();
   }
 }

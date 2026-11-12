@@ -50,6 +50,7 @@ crforge aims to be that simulator for AI and ML research on Clash Royale: an ope
 - **Held to recorded battles**: the `conformance` module plays each recorded battle's scenario and compares every tick with the game's own trace, with no tolerance
 - **Fidelity ledger**: every battle core class says which of its parts are settled and which are not (`./gradlew :core:fidelityReport`)
 - **Replays**: the visualizer plays a replay file, or a crawl of them, on the data version it was recorded on
+- **Realistic rendering** (this fork): the visualizer and an offscreen recorder can draw battles with the game's own art, effects, HUD and sounds, extracted from your own installation into a local cache ([docs/realistic-rendering.md](docs/realistic-rendering.md))
 
 ## Quick Start
 

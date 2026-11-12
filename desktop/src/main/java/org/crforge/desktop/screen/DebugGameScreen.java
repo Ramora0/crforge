@@ -159,6 +159,7 @@ public class DebugGameScreen implements Screen {
         workspace.setInspecting(true);
       }
       case RESTART -> resetBattle();
+      case REALISTIC -> renderer.toggleRealistic();
       case HEADINGS -> {
         renderer.toggleDrawPaths();
         log.info("Heading lines: {}", renderer.isDrawPaths() ? "ON" : "OFF");
@@ -455,6 +456,7 @@ public class DebugGameScreen implements Screen {
           versions.current().contentSha(),
           versions.developmentVersion());
       BattleFrame frame = BattleAdapter.frame(session, view.getOrientation()::sideName);
+      renderer.feedRealistic(session);
       List<String> status = new ArrayList<>();
       if (renderer.isDrawCellCosts()) {
         status.add(

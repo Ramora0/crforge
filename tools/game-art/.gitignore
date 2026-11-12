@@ -1,0 +1,9 @@
+.pytest_cache/
+# never commit extracted game art
+*.png
+*.sctx
+*.sc
+*.glb
+*.ktx
+*.rmat
+*.scdb

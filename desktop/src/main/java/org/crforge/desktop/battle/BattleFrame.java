@@ -68,9 +68,16 @@ public record BattleFrame(
    * @param level the level its side plays it at, counted from 1 across all rarities
    * @param unavailableReason why selection is disabled, or null if available
    * @param pending whether it has been played and waits for its play to run
+   * @param formName the row the card is played as from its slot: its hero row in a hero slot
+   *     (Tombstone_hero), else {@code name}
    */
   public record CardView(
-      String name, int cost, int level, boolean pending, String unavailableReason) {}
+      String name,
+      int cost,
+      int level,
+      boolean pending,
+      String unavailableReason,
+      String formName) {}
 
   /**
    * One champion slot of a king: the champion or hero it follows and its ability's button.

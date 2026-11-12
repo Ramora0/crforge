@@ -255,6 +255,7 @@ public class ReplayGameScreen implements Screen {
         player.slower();
         log.info("Replay speed: {}x", player.getSpeed());
       }
+      case REALISTIC -> renderer.toggleRealistic();
       case HEADINGS -> renderer.toggleDrawPaths();
       case RANGES -> renderer.toggleDrawRanges();
       case DAMAGE -> renderer.toggleDrawDamageNumbers();
@@ -354,6 +355,7 @@ public class ReplayGameScreen implements Screen {
       logStop();
       ViewOrientation orientation = view.getOrientation();
       BattleFrame frame = BattleAdapter.frame(session, orientation::sideName);
+      renderer.feedRealistic(session);
       List<String> status = new ArrayList<>(player.statusLines(orientation));
       status.addAll(NOTES);
       if (renderer.isDrawCellCosts()) {
