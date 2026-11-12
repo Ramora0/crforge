@@ -138,6 +138,7 @@ public final class EffectLayer {
 
     /** The parent's facing on screen, degrees clockwise from +x, for parent-relative emitters. */
     float angle;
+
     boolean ownerGone;
     double ownerGoneAt = Double.MAX_VALUE;
     final Run[] runs;
@@ -221,6 +222,8 @@ public final class EffectLayer {
       prevTimeMs = curTimeMs;
       if (simClock < 0) simClock = curClock;
       if (frame.tick() > 0 && ruins.isEmpty()) ruinsOfMissingTowers(frame, view);
+      // what the observer heard before the first frame (a fast-forward) is not replayed
+      events.clear();
       return;
     }
     prevClock = previous.tick() * TICK;
@@ -382,8 +385,17 @@ public final class EffectLayer {
     int fx = attacker == null ? ev.x() : attacker.x();
     int fy = attacker == null ? ev.y() : attacker.y();
     playFacing(
-        text(character(ev.name()), "DamageEffect"), red, now, ev.x(), ev.y(), lift, view, fx, fy,
-        ev.x(), ev.y());
+        text(character(ev.name()), "DamageEffect"),
+        red,
+        now,
+        ev.x(),
+        ev.y(),
+        lift,
+        view,
+        fx,
+        fy,
+        ev.x(),
+        ev.y());
   }
 
   private void appeared(
@@ -403,7 +415,8 @@ public final class EffectLayer {
         play(text(row, "OneShotEffect"), red, now, e.x(), e.y(), -1, 1f, 0);
         play(text(row, "LoopingEffect"), red, now, e.x(), e.y(), e.id(), 1f, 0);
         EffectDefs.Effect scaled = defs.effect(text(row, "ScaledEffect"), red);
-        if (scaled != null) {
+        if (scaled != null) queueSounds(scaled, now);
+        if (scaled != null && scaled.drawable()) {
           float hw = defs.swfHalfWidth(scaled);
           float want = e.radius() / 1000f * ArtProjection.DU_PER_TILE_X;
           float s = hw > 1 && want > 0 ? want / hw : 1f;
@@ -485,11 +498,13 @@ public final class EffectLayer {
    * (towers included), plays its {@code ProjectileEffect} at the projectile's start, lifted to the
    * shooter's flying height or a tower's turret, facing the aim.
    */
-  private void launched(EntityView p, BattleFrame frame, boolean red, double now, ViewOrientation view) {
+  private void launched(
+      EntityView p, BattleFrame frame, boolean red, double now, ViewOrientation view) {
     EntityView best = null;
     long bestD = 2500L * 2500L;
     for (EntityView a : frame.entities()) {
       if (!a.isCharacter() || a.side() != p.side() || !a.hasTarget()) continue;
+      if (!shoots(character(a.name()), p.name())) continue;
       long dx = a.x() - p.x(), dy = a.y() - p.y();
       long d = dx * dx + dy * dy;
       if (d < bestD) {
@@ -508,6 +523,19 @@ public final class EffectLayer {
     int ax = p.aimX() != 0 || p.aimY() != 0 ? p.aimX() : best.targetX();
     int ay = p.aimX() != 0 || p.aimY() != 0 ? p.aimY() : best.targetY();
     playFacing(effect, red, now, p.x(), p.y(), lift, view, p.x(), p.y(), ax, ay);
+  }
+
+  /** Whether a character row names that projectile in one of its projectile columns. */
+  private static boolean shoots(GameRow row, String projectile) {
+    if (row == null || projectile == null) return false;
+    for (Map.Entry<String, JsonNode> c : row.columns().entrySet()) {
+      if (c.getKey().contains("Projectile")
+          && c.getValue() != null
+          && projectile.equals(c.getValue().asText())) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** A hit landed on {@code e}: the closest enemy attacking it plays its DamageEffect on it. */
@@ -536,8 +564,17 @@ public final class EffectLayer {
     if (best == null) return;
     GameRow row = character(best.name());
     playFacing(
-        text(row, "DamageEffect"), !targetRed, now, e.x(), e.y(), lift(character(e.name()), e),
-        view, best.x(), best.y(), e.x(), e.y());
+        text(row, "DamageEffect"),
+        !targetRed,
+        now,
+        e.x(),
+        e.y(),
+        lift(character(e.name()), e),
+        view,
+        best.x(),
+        best.y(),
+        e.x(),
+        e.y());
   }
 
   /** The cast effect of the spell row named like an area effect (Lightning, Zap, ...). */
@@ -562,9 +599,15 @@ public final class EffectLayer {
     if (DEBUG && name != null) {
       System.err.printf(
           "fx %.2f %s %s at %d,%d%n",
-          now, name, fx == null ? "(nothing to draw)" : fx.parts().size() + " parts", gx, gy);
+          now,
+          name,
+          fx == null || !fx.drawable() ? "(nothing to draw)" : fx.parts().size() + " parts",
+          gx,
+          gy);
     }
     if (fx == null) return null;
+    queueSounds(fx, now);
+    if (!fx.drawable()) return null;
     // a one-shot does not follow; a looping one follows its owner and ends with it
     int f = follow;
     if (!fx.loop() && follow >= 0) {
@@ -583,8 +626,17 @@ public final class EffectLayer {
 
   /** Plays an effect facing from (fx, fy) towards (tx, ty), game units. */
   private void playFacing(
-      String name, boolean red, double now, int gx, int gy, float liftGame,
-      ViewOrientation view, int fx, int fy, int tx, int ty) {
+      String name,
+      boolean red,
+      double now,
+      int gx,
+      int gy,
+      float liftGame,
+      ViewOrientation view,
+      int fx,
+      int fy,
+      int tx,
+      int ty) {
     Instance in = play(name, red, now, gx, gy, -1, 1f, liftGame);
     if (in != null) in.angle = screenAngle(view, fx, fy, tx, ty);
   }
@@ -595,6 +647,42 @@ public final class EffectLayer {
     float dy = -(view.y((float) ty) - view.y((float) fy)) * GROUND_SQUASH;
     if (dx * dx + dy * dy < 1e-3f) return 0;
     return (float) Math.toDegrees(Math.atan2(dy, dx));
+  }
+
+  /** A sound due at a battle time. */
+  private record PendingSound(double at, String ref) {}
+
+  private final List<PendingSound> sounds = new ArrayList<>();
+
+  private void queueSounds(EffectDefs.Effect fx, double now) {
+    if (sounds.size() > 4000) return;
+    for (EffectDefs.Sound s : fx.sounds()) {
+      sounds.add(new PendingSound(now + s.delay(), s.ref()));
+      if (DEBUG) System.err.printf("sound %.2f %s%n", now + s.delay(), s.ref());
+    }
+  }
+
+  /**
+   * The sounds of the effects (and effect parts) that started since the last call, oldest first,
+   * each as {battle seconds it starts at (tick * 0.05, as a string), sound reference such as {@code
+   * soundbanks/card_common_knight/card_common_knight_hit}}. A part delayed by its {@code Time} is
+   * returned once the battle clock (as far as updated or drawn) reaches it, with its own start
+   * time. The same sound starting at the same moment is returned once.
+   */
+  public List<String[]> drainSounds() {
+    double clock = Math.max(simClock, prevClock);
+    List<String[]> out = new ArrayList<>();
+    sounds.sort(java.util.Comparator.comparingDouble(PendingSound::at));
+    for (Iterator<PendingSound> it = sounds.iterator(); it.hasNext(); ) {
+      PendingSound s = it.next();
+      if (s.at() > clock + 1e-6) break;
+      it.remove();
+      // many projectiles of one spell landing together play their sound once
+      boolean dup = false;
+      for (String[] o : out) dup |= o[1].equals(s.ref()) && String.valueOf(s.at()).equals(o[0]);
+      if (!dup) out.add(new String[] {String.valueOf(s.at()), s.ref()});
+    }
+    return out;
   }
 
   private void add(Instance in) {

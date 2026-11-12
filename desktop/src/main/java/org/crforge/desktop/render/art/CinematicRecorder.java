@@ -66,6 +66,8 @@ public final class CinematicRecorder extends ApplicationAdapter {
   private int subFrame;
   private int framesWritten;
   private int framesWanted;
+  private final java.util.List<String[]> sounds = new java.util.ArrayList<>();
+  private float soundOrigin;
   private boolean still;
 
   public CinematicRecorder(ReplayFile replay, GameTables tables, Settings settings) {
@@ -111,7 +113,10 @@ public final class CinematicRecorder extends ApplicationAdapter {
     int[] sh = arena.shadow();
     renderer.setShadowColor(sh[0], sh[1], sh[2], sh[3]);
     hud = new BattleHud(cache, renderer.drawer());
+    hud.setTables(tables);
     effects = new EffectLayer(cache);
+    // every hit and every short-lived area effect (a Zap lives 1 ms), as the battle reports them
+    session.getBattle().getWorld().addObserver(effects.observer());
 
     // fast-forward to the start
     int startTick = Math.round(settings.fromSeconds() * TICKS_PER_SECOND);
@@ -123,6 +128,8 @@ public final class CinematicRecorder extends ApplicationAdapter {
         BattleAdapter.attackTimers(player.getSession()),
         BattleAdapter.projectileFlights(player.getSession()));
     effects.update(current, null, tables, view);
+    soundOrigin = current.tick() * 0.05f;
+    sounds.addAll(effects.drainSounds());
     previous = current;
     still = settings.out().toString().toLowerCase().endsWith(".png");
     framesWanted = still ? 1 : Math.round(settings.seconds() * settings.fps());
@@ -195,6 +202,7 @@ public final class CinematicRecorder extends ApplicationAdapter {
             BattleAdapter.attackTimers(player.getSession()),
             BattleAdapter.projectileFlights(player.getSession()));
         effects.update(current, previous, tables, view);
+        sounds.addAll(effects.drainSounds());
       }
       float alpha = still ? 1f : (subFrame + 1f) / perTick;
       drawFrame(alpha);
@@ -224,7 +232,8 @@ public final class CinematicRecorder extends ApplicationAdapter {
     effects.drawAbove(renderer.drawer(), proj, view, seconds);
     renderer.drawer().end();
     arena.drawOverlay(renderer.drawer(), proj, view, current, alpha);
-    hud.draw(current, view, proj, settings.width(), settings.height(), camera.combined);
+    hud.draw(
+        current, previous, alpha, view, proj, settings.width(), settings.height(), camera.combined);
     pixels.clear();
     Gdx.gl.glPixelStorei(GL20.GL_PACK_ALIGNMENT, 1);
     Gdx.gl.glReadPixels(
@@ -280,12 +289,40 @@ public final class CinematicRecorder extends ApplicationAdapter {
       }
       video = null;
     }
+    if (!still) writeSounds();
     log.info("Wrote {} frame(s) to {}", framesWritten, settings.out());
     Gdx.app.exit();
   }
 
+  /**
+   * The sounds the effects started, one JSON line each ({@code {"t": seconds into the video,
+   * "sound": "soundbanks/<bank>/<event>"}}), beside the video, for {@code crforge-art audio} to
+   * mix.
+   */
+  private void writeSounds() {
+    java.nio.file.Path out =
+        settings.out().resolveSibling(settings.out().getFileName() + ".sounds.jsonl");
+    StringBuilder sb = new StringBuilder();
+    for (String[] s : sounds) {
+      float t = Float.parseFloat(s[0]) - soundOrigin;
+      if (t < 0 || s[1] == null || s[1].isEmpty()) continue;
+      sb.append("{\"t\": ")
+          .append(String.format(java.util.Locale.ROOT, "%.3f", t))
+          .append(", \"sound\": \"")
+          .append(s[1].replace("\"", ""))
+          .append("\"}\n");
+    }
+    try {
+      java.nio.file.Files.writeString(out, sb.toString());
+      log.info("Wrote {} sound events to {}", sounds.size(), out);
+    } catch (IOException e) {
+      log.warn("Cannot write {}: {}", out, e.getMessage());
+    }
+  }
+
   @Override
   public void dispose() {
+    if (effects != null) effects.dispose();
     if (fbo != null) fbo.dispose();
     if (renderer != null) renderer.dispose();
     if (cache != null) cache.dispose();

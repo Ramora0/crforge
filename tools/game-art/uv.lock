@@ -21,6 +21,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "flatbuffers" },
+    { name = "fsb5" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pillow" },
@@ -36,6 +37,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "flatbuffers", specifier = ">=24" },
+    { name = "fsb5", specifier = ">=1.0" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pillow", specifier = ">=10" },
     { name = "texture2ddecoder", specifier = ">=1.0.5" },
@@ -52,6 +54,12 @@ source = { registry = "https://pypi.org/simple" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e8/2d/d2a548598be01649e2d46231d151a6c56d10b964d94043a335ae56ea2d92/flatbuffers-25.12.19-py2.py3-none-any.whl", hash = "sha256:7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4", size = 26661, upload-time = "2025-12-19T23:16:13.622Z" },
 ]
+
+[[package]]
+name = "fsb5"
+version = "1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/35/ae/6c56aa68bd88830b8ce09416455c2e6d135dc62181473b28209f194273d2/fsb5-1.0.tar.gz", hash = "sha256:312d28b580e9c4a0032caac80bcc354672216327f430d063c3beb4a4f3fe621d", size = 8371, upload-time = "2016-03-25T07:05:01.381Z" }
 
 [[package]]
 name = "iniconfig"

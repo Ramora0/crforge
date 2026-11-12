@@ -82,6 +82,12 @@ public final class BattleHud implements Disposable {
     TEXT.put(15485, new TextField(11, 5, 27, 23, 14, 0xffffffff, 0xff022853, c));
     TEXT.put(16060, new TextField(11, 5, 27, 23, 14, 0xffffffff, 0xff510018, c));
     TEXT.put(15487, new TextField(11, 5, 27, 24, 14, 0xffffffff, 0xff022853, c));
+    TEXT.put(15489, new TextField(11, 5, 27, 24, 14, 0xffffffff, 0xff022853, c));
+    TEXT.put(15493, new TextField(11, 5, 27, 24, 14, 0xffffffff, 0xff510303, c));
+    TEXT.put(15476, new TextField(11, 5, 27, 24, 14, 0xffffffff, 0xff510303, c));
+    // evolved units' badges (enemy, player)
+    TEXT.put(15475, new TextField(11, 5, 27, 23, 14, 0xffffffff, 0xff500007, c));
+    TEXT.put(15483, new TextField(11, 5, 27, 23, 14, 0xffffffff, 0xff1f0651, c));
     // princess tower bar: level and hit points (player, enemy)
     TEXT.put(16080, new TextField(-2, 11, 18, 29, 14, 0xfffede2f, 0xff000000, c));
     TEXT.put(16083, new TextField(-2, 11, 90, 31, 16, 0xffbddae9, 0xff013255, l));
@@ -246,15 +252,26 @@ public final class BattleHud implements Disposable {
     boolean tower = e.kind() == EntityView.Kind.TOWER;
     String barClass =
         place != null ? place.barClass() : tower ? (e.king() ? "Summoner" : "Tower") : "Medium";
+    // a shield class shows the shield while it holds, then the plain bar of that size
+    boolean shieldClass = barClass.startsWith("Shield") || barClass.startsWith("MediumShield");
+    boolean shieldUp = shieldClass && e.shield() > 0 && e.maxShield() > 0;
+    if (shieldClass && !shieldUp) {
+      barClass =
+          (barClass.toLowerCase(java.util.Locale.ROOT).contains("small") ? "Small" : "Medium")
+              + (barClass.endsWith("_EV1") ? "_EV1" : "");
+    }
     BarStyle style = barStyles.get(barClass);
     if (style == null) style = barStyles.get(tower ? "Tower" : "Medium");
     if (style == null) return;
     float share =
         e.bar() == EntityView.Bar.TIMER && e.lifetimeMs() > 0
             ? (float) e.lifeMs() / e.lifetimeMs()
-            : e.healthShare();
+            : shieldUp ? (float) e.shield() / e.maxShield() : e.healthShare();
     share = Math.max(0f, Math.min(1f, share));
-    boolean damaged = e.bar() == EntityView.Bar.TIMER || e.hitPoints() < e.maxHitPoints();
+    boolean damaged =
+        e.bar() == EntityView.Bar.TIMER
+            || e.hitPoints() < e.maxHitPoints()
+            || (shieldUp && e.shield() < e.maxShield());
     boolean king = "Summoner".equals(barClass);
     String exportName;
     if (damaged || (tower && !king)) exportName = blue ? style.player() : style.enemy();

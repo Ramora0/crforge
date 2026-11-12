@@ -23,8 +23,8 @@ import org.crforge.desktop.render.ViewOrientation;
 
 /**
  * The debug screens' realistic view (key {@code X}, or {@code --realistic}): the arena and every
- * entity drawn with the game's own art in place of the debug shapes, fitted into the arena's
- * place on the screen. Available only when an art cache exists (see {@code tools/game-art}).
+ * entity drawn with the game's own art in place of the debug shapes, fitted into the arena's place
+ * on the screen. Available only when an art cache exists (see {@code tools/game-art}).
  */
 public final class RealisticView implements Disposable {
 
@@ -48,9 +48,18 @@ public final class RealisticView implements Disposable {
     return ArtCache.locate().map(RealisticView::new);
   }
 
-  /** The per-tick state the frame does not carry (attack timers, projectile flights). */
+  private BattleSession observed;
+
+  /**
+   * The per-tick state the frame does not carry (attack timers, projectile flights), and the
+   * session's hits for the effects.
+   */
   public void feed(BattleSession session) {
     if (session == null) return;
+    if (session != observed) {
+      session.getBattle().getWorld().addObserver(effects.observer());
+      observed = session;
+    }
     renderer.setTickData(
         BattleAdapter.attackTimers(session), BattleAdapter.projectileFlights(session));
   }
@@ -101,6 +110,7 @@ public final class RealisticView implements Disposable {
   @Override
   public void dispose() {
     renderer.dispose();
+    effects.dispose();
     cache.dispose();
   }
 }

@@ -94,7 +94,11 @@ final class EffectDefs {
   record Part(Layer layer, float delay, float scale, boolean loop, Sprite swf, Emitter emitter) {}
 
   /** An effect's drawable parts; empty for an effect that only plays sounds. */
-  record Effect(String name, List<Part> parts, boolean loop) {
+  /** A sound a component names ({@code soundbanks/...}), {@code delay} seconds into the effect. */
+  record Sound(float delay, String ref) {}
+
+  /** An effect's drawable parts and sounds; either may be empty. */
+  record Effect(String name, List<Part> parts, boolean loop, List<Sound> sounds) {
     boolean drawable() {
       return !parts.isEmpty();
     }
@@ -138,9 +142,15 @@ final class EffectDefs {
             k -> {
               List<Part> parts = new ArrayList<>();
               boolean[] loop = {false};
-              expand(name, red, 0f, 1f, false, 0, parts, loop);
-              Effect e = new Effect(name, Collections.unmodifiableList(parts), loop[0]);
-              return e.drawable() ? Optional.of(e) : Optional.empty();
+              List<Sound> sounds = new ArrayList<>();
+              expand(name, red, 0f, 1f, false, 0, parts, sounds, loop);
+              Effect e =
+                  new Effect(
+                      name,
+                      Collections.unmodifiableList(parts),
+                      loop[0],
+                      Collections.unmodifiableList(sounds));
+              return e.drawable() || !sounds.isEmpty() ? Optional.of(e) : Optional.empty();
             })
         .orElse(null);
   }
@@ -153,6 +163,7 @@ final class EffectDefs {
       boolean loop,
       int depth,
       List<Part> out,
+      List<Sound> sounds,
       boolean[] anyLoop) {
     if (depth > MAX_DEPTH || name == null) return;
     JsonNode def = effects.path(name);
@@ -171,6 +182,8 @@ final class EffectDefs {
       float d = delay + c.path("Time").asInt(0) / 1000f;
       float cs = s * c.path("RenderableScale").asInt(100) / 100f;
       Layer layer = Layer.of(c.path("Layer").asText(null));
+      String sound = c.path("Sound").asText("");
+      if (!sound.isBlank()) sounds.add(new Sound(d, sound));
       switch (type) {
         case "SWF" -> {
           Sprite sp = sprite(c.path("FileName").asText(null), c.path("ExportName").asText(null));
@@ -181,7 +194,7 @@ final class EffectDefs {
           if (em != null) out.add(new Part(layer, d, cs, l, null, em));
         }
         case "Effect" ->
-            expand(c.path("Effect").asText(null), red, d, cs, l, depth + 1, out, anyLoop);
+            expand(c.path("Effect").asText(null), red, d, cs, l, depth + 1, out, sounds, anyLoop);
         default -> {}
       }
     }

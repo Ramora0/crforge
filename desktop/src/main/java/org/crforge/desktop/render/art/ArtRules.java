@@ -8,8 +8,8 @@ package org.crforge.desktop.render.art;
 
 /**
  * The facing rule the game's art follows (docs/realistic-rendering.md §2): an action's {@code n}
- * facing exports cover the right half of the circle, {@code _1} facing up the screen (away from
- * the viewer) to {@code _n} facing down it, and the left half reuses them mirrored.
+ * facing exports cover the right half of the circle, {@code _1} facing up the screen (away from the
+ * viewer) to {@code _n} facing down it, and the left half reuses them mirrored.
  */
 public final class ArtRules {
 

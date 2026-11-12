@@ -22,6 +22,7 @@ BATTLE_TABLES = [
     "csv_logic/character_buffs*", "csv_logic/locations.csv", "csv_logic/arenas*.csv",
     "locations/*",                                   # per-arena composition (level_*.sc + export)
     "legacy_vfx/effects.json",                       # the effects table (FileName per SWF component)
+    "legacy_vfx/emitters.json",                      # particle emitters (their sprite files)
     "csv_client/health_bars.csv", "csv_client/healthbars.toml", "csv_client/client_globals.csv",
 ]
 # columns that point at menu/collection art or cosmetic variants, not at what a battle draws

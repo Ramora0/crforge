@@ -38,6 +38,13 @@ public final class ScDrawer {
   private final Affine2[] stack = new Affine2[MAX_DEPTH + 1];
   private final Affine2 local = new Affine2();
   private int currentBlend = -1;
+  // the colour transforms' additive part, straight colour, per depth of the walk
+  private final float[] addR = new float[MAX_DEPTH + 1];
+  private final float[] addG = new float[MAX_DEPTH + 1];
+  private final float[] addB = new float[MAX_DEPTH + 1];
+  private float curAddR = Float.NaN, curAddG, curAddB;
+  private com.badlogic.gdx.graphics.glutils.ShaderProgram colorShader;
+  private boolean silhouetteOn;
 
   public ScDrawer(PolygonSpriteBatch batch, ArtCache cache) {
     this.batch = batch;
@@ -71,11 +78,40 @@ public final class ScDrawer {
         throw new IllegalStateException("silhouette shader: " + silhouette.getLog());
       }
     }
-    batch.setShader(on ? silhouette : null);
+    silhouetteOn = on;
+    batch.setShader(on ? silhouette : colorShader());
+    curAddR = Float.NaN;
+  }
+
+  /**
+   * The colour shader: the premultiplied texture times the vertex colour (the transforms'
+   * multipliers) plus the transforms' additive colour, carried in {@code u_add} (straight).
+   */
+  private com.badlogic.gdx.graphics.glutils.ShaderProgram colorShader() {
+    if (colorShader == null) {
+      String vertex =
+          "attribute vec4 a_position; attribute vec4 a_color; attribute vec2 a_texCoord0;\n"
+              + "uniform mat4 u_projTrans; varying vec4 v_color; varying vec2 v_texCoords;\n"
+              + "void main() { v_color = a_color; v_color.a = v_color.a * (255.0/254.0);\n"
+              + "  v_texCoords = a_texCoord0; gl_Position = u_projTrans * a_position; }";
+      String fragment =
+          "#ifdef GL_ES\nprecision mediump float;\n#endif\n"
+              + "varying vec4 v_color; varying vec2 v_texCoords; uniform sampler2D u_texture;\n"
+              + "uniform vec3 u_add;\n"
+              + "void main() { vec4 t = texture2D(u_texture, v_texCoords);\n"
+              + "  gl_FragColor = v_color * t + vec4(u_add * t.a * v_color.a, 0.0); }";
+      colorShader = new com.badlogic.gdx.graphics.glutils.ShaderProgram(vertex, fragment);
+      if (!colorShader.isCompiled()) {
+        throw new IllegalStateException("colour shader: " + colorShader.getLog());
+      }
+    }
+    return colorShader;
   }
 
   /** Starts a batch of drawing (blend state reset). */
   public void begin() {
+    batch.setShader(silhouetteOn ? silhouette : colorShader());
+    curAddR = Float.NaN;
     batch.begin();
     currentBlend = -1;
     setBlend(BLEND_NORMAL);
@@ -92,6 +128,7 @@ public final class ScDrawer {
   public void draw(ScScene scene, int id, int frame, Affine2 transform, Color tint) {
     stack[0].set(transform);
     overrides = null;
+    addR[0] = addG[0] = addB[0] = 0;
     drawObject(scene, id, frame, 0, tint.r, tint.g, tint.b, tint.a, BLEND_NORMAL);
     setBlend(BLEND_NORMAL);
   }
@@ -115,6 +152,7 @@ public final class ScDrawer {
       java.util.List<Override> childOverrides) {
     stack[0].set(transform);
     overrides = childOverrides;
+    addR[0] = addG[0] = addB[0] = 0;
     drawObject(scene, id, frame, 0, tint.r, tint.g, tint.b, tint.a, BLEND_NORMAL);
     overrides = null;
     setBlend(BLEND_NORMAL);
@@ -125,7 +163,9 @@ public final class ScDrawer {
     if (depth >= MAX_DEPTH || a <= 0.002f) return;
     ScScene.Command[] commands = scene.shape(id);
     if (commands != null) {
-      for (ScScene.Command c : commands) drawCommand(scene, c, stack[depth], r, g, b, a, blend);
+      for (ScScene.Command c : commands) {
+        drawCommand(scene, c, stack[depth], depth, r, g, b, a, blend);
+      }
       return;
     }
     ScScene.Clip clip = scene.clip(id);
@@ -152,9 +192,16 @@ public final class ScDrawer {
         m.mul(local);
       }
       float cr = r, cg = g, cb = b, ca = a;
+      addR[depth + 1] = addR[depth];
+      addG[depth + 1] = addG[depth];
+      addB[depth + 1] = addB[depth];
       if (ci != ScScene.IDENTITY && bank != null && ci * 7 + 6 < bank.colors().length) {
         int[] cc = bank.colors();
         int o = ci * 7;
+        // parent(child(x)) = x * childMul * parentMul + childAdd * parentMul + parentAdd
+        addR[depth + 1] = cc[o + 4] / 255f * r + addR[depth];
+        addG[depth + 1] = cc[o + 5] / 255f * g + addG[depth];
+        addB[depth + 1] = cc[o + 6] / 255f * b + addB[depth];
         cr *= cc[o] / 255f;
         cg *= cc[o + 1] / 255f;
         cb *= cc[o + 2] / 255f;
@@ -189,7 +236,15 @@ public final class ScDrawer {
   }
 
   private void drawCommand(
-      ScScene scene, ScScene.Command c, Affine2 m, float r, float g, float b, float a, int blend) {
+      ScScene scene,
+      ScScene.Command c,
+      Affine2 m,
+      int depth,
+      float r,
+      float g,
+      float b,
+      float a,
+      int blend) {
     int n = c.xy().length / 2;
     if (n < 3 || n > MAX_VERTS) return;
     Texture texture = cache.texture(scene, c.texture());
@@ -214,6 +269,14 @@ public final class ScDrawer {
       tris[t++] = (short) (i + 2);
     }
     setBlend(blend);
+    if (!silhouetteOn
+        && (addR[depth] != curAddR || addG[depth] != curAddG || addB[depth] != curAddB)) {
+      batch.flush();
+      curAddR = addR[depth];
+      curAddG = addG[depth];
+      curAddB = addB[depth];
+      colorShader.setUniformf("u_add", curAddR, curAddG, curAddB);
+    }
     batch.draw(texture, verts, 0, n * 5, tris, 0, t);
   }
 

@@ -3,6 +3,8 @@
     crforge-art extract --apk base.apk split_*.apk          # APKs (or one .xapk/.apkm bundle)
     crforge-art extract --assets path/to/assets             # an already-extracted assets/ folder
     crforge-art extract --adb [SERIAL]                      # pull the APKs from a connected device
+    crforge-art extract ... --audio                         # also decode the battle sounds
+    crforge-art audio battle.mp4                            # mix a recording's sounds into it
 """
 from __future__ import annotations
 
@@ -34,7 +36,26 @@ def main(argv: list[str] | None = None) -> int:
                     help="parallel worker processes (default: cpu count - 2)")
     ex.add_argument("--force", action="store_true", help="re-extract files already in the cache")
     ex.add_argument("--only", nargs="+", metavar="NAME", help="extract just these .sc files (e.g. chr_knight.sc)")
+    ex.add_argument("--audio", action="store_true",
+                    help="also decode the battle sound banks (needs libvorbis)")
+    au = sub.add_parser("audio", help="mix a recording's sound events (VIDEO.sounds.jsonl) into it")
+    au.add_argument("video", help="a video written by the desktop's --record")
+    au.add_argument("--out", help="output video (default: <video>_audio.mp4)")
+    au.add_argument("--cache", default=DEFAULT_OUT, help=f"cache root (default {DEFAULT_OUT})")
+    au.add_argument("--no-music", action="store_true", help="sound effects only")
     args = ap.parse_args(argv)
+
+    if args.cmd == "audio":
+        import json as _json
+
+        from . import audio
+
+        root = Path(args.cache).expanduser()
+        current = root / "current.json"
+        if current.exists():
+            root = root / _json.loads(current.read_text())["content_sha"]
+        audio.mix(Path(args.video), root, Path(args.out) if args.out else None, music=not args.no_music)
+        return 0
 
     from . import extract, sources
 
@@ -47,6 +68,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         res = extract.run(src, Path(args.out), scope=args.scope, workers=args.workers, force=args.force,
                           only=args.only)
+        if args.audio:
+            from . import audio
+
+            audio.extract(src, res.root)
     finally:
         src.close()
 

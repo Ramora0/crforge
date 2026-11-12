@@ -77,7 +77,8 @@ public class DesktopLauncher {
 
   public static void main(String[] args) {
     // --realistic: the debug screens open with the game's own art (key X toggles it)
-    if (Arrays.asList(args).contains("--realistic")) System.setProperty("crforge.realistic", "true");
+    if (Arrays.asList(args).contains("--realistic"))
+      System.setProperty("crforge.realistic", "true");
     DataSelection.Choice choice = DataSelection.ofProcess();
     GameTables tables = loadTables(choice, System.out, System.err);
     if (tables == null) {
