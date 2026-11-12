@@ -448,7 +448,8 @@ def build_model(ctx: Ctx, model_path: str, asm_clip_paths: list[str]) -> dict:
     names = odin.node_names(g)
     by_name: dict[str, int] = {}
     for i, n in enumerate(names):
-        by_name.setdefault(n, i)
+        if "skin" not in g["nodes"][i]:  # glTF ignores a skinned mesh node's transform: no channels
+            by_name.setdefault(n, i)
     prefix = re.sub(r"(_lod\d+)?(_rig)?(_lod\d+)?$", "", posixpath.basename(rel)[:-4])
     seen = set()
     clips = []
