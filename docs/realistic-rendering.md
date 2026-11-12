@@ -258,7 +258,7 @@ flipX = θ < 0
 Facing input: `headingX/Y` is the logic **facing**, not just the velocity, so use it as it is.
 
 - At creation, `CharacterEntity` sets it to `(0, ±256)` toward the enemy, so a fresh unit shows `dir 1` at the bottom and `dir 9` at the top.
-- While the unit targets, `CharacterEntity.turnToward(reference)` turns it to the vector to the reference. Towers do the same through `TowerEntity` `turn()`.
+- While the unit targets, `CharacterEntity.turnToward(reference)` turns it to the vector to the reference. Crown towers are not characters: their facing stays `(0, 0)` (only the Royal Chef's throw calls `TowerEntity` `turn()`), so a tower's turret and rider aim at the reference it holds (`targetX/Y`), keeping the last aim without one (DATA, from the core code and a facing dump of the King tower).
 - Movement updates it, except in the `FACING_GATE_MASK` states (standing, attacking, deploying…).
 
 So during an attack it already points at the target (DATA, from the core code). Only when it is (0,0), which happens when a reference stands on the unit's own spot, keep the last facing.
@@ -277,6 +277,8 @@ Use the game-space (unsquashed) vector, not one squashed by the 0.81 y factor of
 | 0 (single clip) | Cannon, Tesla, Bomb Tower, King/Princess towers, most buildings | Cannon (`building_cannon`, 19 frames) and King Tower (`KingTower_blue`, child `turret` with 36 frames) carry the turret angle **on the timeline**. `HasRotationOnTimeline = true` on 12 character rows and 16 building rows. Cannon: `frame = round(|θ|/10)`, 0 = up, 9 = right, 18 = down; flip for left (`cannon_full.png`). `TurretMovement` (5, 10, 15) is the turret's angular step (INFERRED) |
 
 **Confidence.** The 9-direction mapping is DATA, checked visually on Knight, Hog Rider, Musketeer and Giant. Mirroring is DATA: no left-facing exports exist. Ground-angle versus screen-angle is INFERRED. The facing source is DATA (core code). The client may smooth turns, as rows with `RotateAngleSpeed` suggest; snapping the index each frame is fine.
+
+The Lava Hound flying north (ladder replay, 66–80 s and 131–148 s) keeps one heading (`(53, 250)` to `(57, 249)`, export 2 mirrored) every tick: its sway is the `run1` clip's own wing flap (18 frames @24), not a facing flip, so no smoothing is applied.
 
 ---
 
@@ -493,7 +495,7 @@ The base is 108 du wide against a 3-tile footprint of 89 du, because the battlem
   - 18 = right.
   - ~35 = down.
   - About 5° per frame. For angles on the left, use the mirrored frame and flip x.
-  - Same scheme as the Cannon's 19 frames at 10° (§2). Aim it from `headingX/Y`; the core turns towers too (`TowerEntity.turn`).
+  - Same scheme as the Cannon's 19 frames at 10° (§2). Aim it at the tower's reference (`targetX/Y`): the core never turns a crown tower's `headingX/Y` (§2).
   - Apply the parent frame's colour transforms. They hide the turret while the tower is idle.
 - **Child `king_dummy`.** An empty placeholder with the identity matrix. Draw the King there, at its place in the frame's element order: blue frames list the king after the turret, red ones before it.
   - The King is `sc/chr_king.sc` `King_blue` (seen from behind) or `King_red` (facing the camera).
@@ -668,6 +670,18 @@ Order, bottom to top:
 
 Ordering is INFERRED from what sits on each layer. Base versus Ground is a GUESS.
 
+The renderer draws the Object layer of effects on the ground (not lifted) in the same y-sort as the ground units, buildings and towers: an Object part is drawn just before the first unit nearer the viewer than the effect's anchor, so a death puff behind a tower stays behind it. Object parts of lifted effects (a flyer's death) draw with the Above layer, over the units.
+
+**Death puff size (GUESS).** At face value `Death_player`'s purple puff (`Death_enemy_puff`: 12 additive `explosion_purple_glow1` glows at 23–30 %, a clip that peaks 243 × 182 du at frame 12) stacks into a cloud about 1.5 tiles wide, larger than the game's. A troop's or building's `DeathEffect` is drawn at 0.7 of its scale (`EffectLayer.DEATH_SCALE`).
+
+**Reflected attacks (Electro Giant).** The core reports each reflect (`WorldObserver.reflected`; one that struck back carries the buff it gave). Each plays, from the reflecting unit's row:
+
+- `ReflectedAttackTargetedEffect` (`electro_giant_beam`: SWF `electro_wiz_beam`, `FlashWidth 80`, `PivotClip attack_pivot`, Above, sound `electro_wizard_beam`) as `ReflectedAttackTargetedEffectSources` (2) beams. Each runs from the `attack_pivot_<n>` child of the unit's idle clip at its facing (the coils on its back) to the unit struck. The clip is authored along +x from 1 to 82 du, so it is rotated to the target and stretched along x by distance / `FlashWidth`, its thickness as authored (INFERRED). Both ends follow their units while the clip plays (23 frames @30).
+- `ReflectedAttackEffect` (`electro_giant_beam_hit`: sparks, puff, `vmc_electrowizard_def_v_hit`, sound `electro_wizard_hit`) at the unit struck.
+- The `ReflectedAttackBuff`'s `FilterFile`/`FilterExportName` on the unit struck (`ZapFreeze`: `filter_cold`, a blue tint 29 frames @60, about its 500 ms).
+
+The struck point is lifted to a flyer's `FlyingHeight`, or a crown tower's `AttachedCharacterHeight` (its shooter, GUESS).
+
 **Columns that reference effects.**
 
 | Column | Table | When, where |
@@ -677,6 +691,7 @@ Ordering is INFERRED from what sits on each layer. Base versus Ground is a GUESS
 | `ProjectileEffect` | characters | at launch, at the shooter (`musketeer_attack`: muzzle fire and smoke, Above) |
 | `DamageEffect` | characters | when this unit's hit lands, at the target |
 | `DeathEffect` | characters | at the death point. `knight_die` → `Death_player` (elixir burst + Base splat) + sword particle. **No death clip: remove the sprite and play this** |
+| `ReflectedAttackTargetedEffect`, `ReflectedAttackEffect` | characters | each reflect that strikes back: beams from the reflecting unit's pivots, a hit on the unit struck (see below) |
 | `MoveEffect` / `LoopMoveEffect` | characters | footsteps, on the `run1` `action_frame1/2` labels (Ground) |
 | `LandingEffect` | characters (55) | end of a jump or dash |
 | `TrailEffect` / `HitEffect` / `DeathEffect` | projectiles | §6 |
@@ -858,3 +873,4 @@ The bottom side of the `ViewOrientation` is blue/"player". **DATA.**
 10. **King ↔ `chr_king.sc` link.** No table names it; it is assumed hard-coded in the client.
 11. **Particle emitters** are about 70% of effect components. Without an emitter, most hit, death and trail visuals are missing. The SWF-only parts (stuck arrows, spell rings, zap bolts) are the cheap wins.
 12. **Not done:** the Training Camp decoration pass was not composited; only its ground pads were measured. The ruin exports were not rendered. Hero, evo and `sc3d`-only art was not examined beyond confirming that SC2 fallbacks exist.
+13. **Lava Pups' glow.** Each `chr_lava_pups.sc` clip draws over the body a glow (shape 1, a 24 du soft disc scaled about 2.3×, covering the whole pup) with blend 8 (add) and the colour transform `mul (18, 18, 18)`, `alpha 187`, `add (255, 255, 151)`: a pale-yellow additive wash at 0.73 that turns the orange-brown body yellow-orange. The transform's byte order is DATA (identity is `255,255,255,a,0,0,0` 343 times in `effects.sc`, and `filter_cold` is a blue add), and the drawer applies it as Flash does (`rgb·mul + add·a`, then added). So the bright pups are drawn as the data says; whether the game's shader treats an additive child's added colour differently is unverified.

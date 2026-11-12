@@ -49,7 +49,9 @@ import org.crforge.desktop.render.ViewOrientation;
  *       {@code ProjectileEffect} at the launch;
  *   <li>a character whose hit points drop next to an enemy attacking it plays that attacker's
  *       {@code DamageEffect}, or, with {@link #observer()} added to the battle's world, every hit
- *       plays its attacker's, and area effects too short-lived for any frame (Zap) still play.
+ *       plays its attacker's, and area effects too short-lived for any frame (Zap) still play;
+ *   <li>with the observer, a reflecting unit striking back (the Electro Giant) plays its row's
+ *       reflect beams and hit, and its buff's filter on the unit struck.
  * </ul>
  *
  * <p>Effects are drawn through {@link EffectDrawer}, which applies the colour transforms' added
@@ -90,6 +92,13 @@ public final class EffectLayer {
    * gravity -1700) peaked over two tiles up, the game's at about half a troop's height.
    */
   private static final float Z_SCALE = 0.5f;
+
+  /**
+   * A troop's or building's {@code DeathEffect} drawn at this scale (GUESS): at face value its
+   * purple puff ({@code Death_enemy_puff}: 12 additive glows at 23-30% of a clip that peaks 243 du
+   * wide) stacks into a bright cloud about 1.5 tiles wide, the game's is smaller.
+   */
+  private static final float DEATH_SCALE = 0.7f;
 
   /** Additive particles of one emitter drawn at full strength before they share it. */
   private static final int GLOW_CROWD = 2;
@@ -261,6 +270,7 @@ public final class EffectLayer {
       struck.clear();
       targetFilters.clear();
       activations.clear();
+      reflects.clear();
       for (EntityView e : frame.entities()) {
         if (e.kind() == EntityView.Kind.TOWER
             && e.maxHitPoints() > 0
@@ -324,6 +334,7 @@ public final class EffectLayer {
       }
     }
     for (Event ev : events) heard(ev, after, view, now);
+    reflections(after, view, now);
     attackStarts(frame, before, view, now);
     footsteps(frame, before, view, now);
     flashes(after, view, now);
@@ -661,6 +672,182 @@ public final class EffectLayer {
   }
 
   // ---------------------------------------------------------------------------------------------
+  // reflected attacks (the Electro Giant's zap back)
+
+  /** A reflect that struck back: the reflecting unit, the one struck, and the buff it gave. */
+  private record Reflect(int from, int to, int side, int fx, int fy, int tx, int ty, String buff) {}
+
+  private final List<Reflect> reflects = new ArrayList<>();
+
+  /** A beam clip stretched from a unit's pivot to another unit while it plays. */
+  private static final class Beam {
+    EffectDefs.Sprite sprite;
+    double start;
+    float scale;
+    float width;
+    int from, to, pivot;
+    String fromName;
+    boolean blue;
+    float lift;
+    float fx, fy, pfx, pfy, tx, ty, ptx, pty;
+    float heading;
+  }
+
+  private final List<Beam> beams = new ArrayList<>();
+
+  /**
+   * Each reflect that struck back plays the reflecting unit's row: {@code
+   * ReflectedAttackTargetedEffect} as beams from its {@code ReflectedAttackTargetedEffectSources}
+   * pivots ({@code attack_pivot_1..n} of its clip) to the unit struck, the effect's {@code
+   * FlashWidth} stretched to the distance; {@code ReflectedAttackEffect} on the unit struck; and
+   * the {@code ReflectedAttackBuff}'s {@code FilterFile}/{@code FilterExportName} on it (ZapFreeze:
+   * {@code filter_cold}). Sounds come with the effects.
+   */
+  private void reflections(Map<Integer, EntityView> after, ViewOrientation view, double now) {
+    Set<Long> seen = new java.util.HashSet<>();
+    for (Reflect r : reflects) {
+      if (!seen.add(((long) r.from() << 32) ^ r.to())) continue;
+      EntityView g = after.get(r.from());
+      EntityView v = after.get(r.to());
+      String giant = g != null ? g.name() : null;
+      if (giant == null) continue;
+      GameRow row = character(giant);
+      boolean red = !view.blue(r.side());
+      int tx = v == null ? r.tx() : v.x(), ty = v == null ? r.ty() : v.y();
+      float lift = v == null ? 0 : struckHeight(v);
+      play(text(row, "ReflectedAttackEffect"), red, now, tx, ty, -1, 1f, lift);
+      String beam = text(row, "ReflectedAttackTargetedEffect");
+      EffectDefs.Effect fx = defs.effect(beam, red);
+      if (fx != null) {
+        queueSounds(fx, now);
+        int sources =
+            Math.max(1, RealisticRenderer.integer(row, "ReflectedAttackTargetedEffectSources", 1));
+        float width = defs.flashWidth(beam);
+        for (EffectDefs.Part part : fx.parts()) {
+          if (part.swf() == null || width <= 0 || beams.size() > 64) continue;
+          for (int k = 1; k <= sources; k++) {
+            Beam b = new Beam();
+            b.sprite = part.swf();
+            b.start = now + part.delay();
+            b.scale = part.scale();
+            b.width = width;
+            b.from = r.from();
+            b.to = r.to();
+            b.pivot = k;
+            b.fromName = giant;
+            b.blue = !red;
+            b.lift = lift;
+            b.fx = b.pfx = g.x();
+            b.fy = b.pfy = g.y();
+            b.tx = b.ptx = tx;
+            b.ty = b.pty = ty;
+            b.heading = headingDegrees(g, view, b.heading);
+            beams.add(b);
+          }
+        }
+      }
+      GameRow buff = row("character_buffs", r.buff());
+      String file = text(buff, "FilterFile"), export = text(buff, "FilterExportName");
+      if (file != null && export != null) {
+        targetFlash.put(r.to(), new Flash(file, export, now));
+      }
+    }
+    reflects.clear();
+    // the beams follow both ends
+    for (Beam b : beams) {
+      b.pfx = b.fx;
+      b.pfy = b.fy;
+      b.ptx = b.tx;
+      b.pty = b.ty;
+      EntityView g = after.get(b.from);
+      if (g != null) {
+        b.fx = g.x();
+        b.fy = g.y();
+        b.heading = headingDegrees(g, view, b.heading);
+      }
+      EntityView v = after.get(b.to);
+      if (v != null) {
+        b.tx = v.x();
+        b.ty = v.y();
+      }
+    }
+    beams.removeIf(b -> (simClockOr(now) - b.start) * b.sprite.fps() >= b.sprite.frames());
+  }
+
+  private double simClockOr(double now) {
+    return Math.max(simClock, now);
+  }
+
+  /** Where a reflect strikes a unit: a flyer at its flying height, a tower at its shooter's. */
+  private float struckHeight(EntityView v) {
+    GameRow row = character(v.name());
+    if (v.air()) return RealisticRenderer.integer(row, "FlyingHeight", 0);
+    if (v.kind() == EntityView.Kind.TOWER) {
+      return RealisticRenderer.integer(row, "AttachedCharacterHeight", 0);
+    }
+    return 0;
+  }
+
+  /** A unit's facing on screen as the renderer takes it (§2), or {@code last} without one. */
+  private static float headingDegrees(EntityView e, ViewOrientation view, float last) {
+    float fx = view.x((float) (e.x() + e.headingX())) - view.x((float) e.x());
+    float fy = view.y((float) (e.y() + e.headingY())) - view.y((float) e.y());
+    if (fx * fx + fy * fy < 1e-4f) return last;
+    return ArtRules.facingDegrees(fx, fy);
+  }
+
+  /** The beams playing, drawn over the units. */
+  private void drawBeams(ArtProjection proj, ViewOrientation view, float alpha) {
+    float ppdu = proj.pixelsPerDisplayUnit();
+    for (Beam b : beams) {
+      double age = simClock - b.start;
+      if (age < 0) continue;
+      int frame = Math.min(b.sprite.frames() - 1, (int) Math.floor(age * b.sprite.fps()));
+      float gx = b.pfx + (b.fx - b.pfx) * alpha, gy = b.pfy + (b.fy - b.pfy) * alpha;
+      float[] pivot = pivot(b);
+      float sx = proj.x(view, gx) + pivot[0] * ppdu;
+      float sy = proj.y(view, gy) - pivot[1] * ppdu;
+      float ex = proj.x(view, b.ptx + (b.tx - b.ptx) * alpha);
+      float ey = proj.y(view, b.pty + (b.ty - b.pty) * alpha) + proj.height(b.lift);
+      float dx = ex - sx, dy = ey - sy;
+      float len = (float) Math.sqrt(dx * dx + dy * dy);
+      if (len < 1f) continue;
+      float s = ppdu * b.scale;
+      transform.setToTranslation(sx, sy);
+      transform.rotate((float) Math.toDegrees(Math.atan2(dy, dx)));
+      transform.scale(len / b.width, -s);
+      tint.set(1, 1, 1, 1);
+      art.draw(b.sprite.scene(), b.sprite.id(), frame, transform, tint);
+    }
+  }
+
+  /**
+   * The offset (du, y down, the unit's scale applied) of a beam's source: the {@code
+   * attack_pivot_<n>} child of the unit's idle clip at its facing, mirrored with it; 0 without one.
+   */
+  private float[] pivot(Beam b) {
+    VisualLookup.Unit unit = lookup.unit(b.fromName, b.blue);
+    if (unit == null) return new float[] {0, 0};
+    int[] df = ArtRules.facingExport(b.heading, Math.max(1, unit.directions("idle")));
+    int id = unit.animation("idle", df[0]);
+    ScScene.Clip clip = id < 0 ? null : unit.scene.clip(id);
+    if (clip == null || clip.frameCount() == 0) return new float[] {0, 0};
+    int child = clip.childNamed("attack_pivot_" + b.pivot);
+    if (child < 0) child = clip.childNamed("attack_pivot");
+    if (child < 0) return new float[] {0, 0};
+    int[] el = clip.frames()[0];
+    ScScene.Bank bank = unit.scene.bank(clip.bank());
+    for (int k = 0; k + 2 < el.length; k += 3) {
+      if (el[k] != child) continue;
+      int mi = el[k + 1];
+      if (mi == ScScene.IDENTITY || bank == null || mi * 6 + 5 >= bank.matrices().length) break;
+      float x = bank.matrices()[mi * 6 + 4], y = bank.matrices()[mi * 6 + 5];
+      return new float[] {(df[1] == 1 ? -x : x) * unit.scale, y * unit.scale};
+    }
+    return new float[] {0, 0};
+  }
+
+  // ---------------------------------------------------------------------------------------------
   // king tower activation
 
   /** Kings whose activation was heard: {id, x, y, side}. */
@@ -762,6 +949,16 @@ public final class EffectLayer {
             || kind == org.crforge.core.battle.unit.ActivationEvent.Kind.EFFECT) {
           activations.add(new int[] {king.getId(), king.x(), king.y(), king.side()});
         }
+      }
+
+      @Override
+      public void reflected(int tick, org.crforge.core.battle.unit.Reflection r) {
+        // a reflect that struck back (its buff applied); none when the hit was out of its reach
+        if (r == null || r.buff() == null || r.target() == null || r.struck() == null) return;
+        if (reflects.size() > 500) return;
+        WorldEntity t = r.target(), v = r.struck();
+        reflects.add(
+            new Reflect(t.getId(), v.getId(), t.side(), t.x(), t.y(), v.x(), v.y(), r.buff()));
       }
 
       @Override
@@ -920,7 +1117,7 @@ public final class EffectLayer {
     switch (p.kind()) {
       case TROOP, BUILDING -> {
         GameRow row = character(p.name());
-        play(text(row, "DeathEffect"), red, now, p.x(), p.y(), -1, 1f, lift(row, p));
+        play(text(row, "DeathEffect"), red, now, p.x(), p.y(), -1, DEATH_SCALE, lift(row, p));
       }
       case TOWER -> {
         if (destroyedTowers.add(p.id())) towerDestroyed(p, red, now);
@@ -1435,12 +1632,59 @@ public final class EffectLayer {
   public void drawAbove(ScDrawer drawer, ArtProjection proj, ViewOrientation view, float seconds) {
     float alpha = alphaOf(seconds);
     advance(prevClock + (curClock - prevClock) * alpha);
-    if (!anyIn(false)) return;
+    if (!anyIn(false) && beams.isEmpty()) return;
     beginArt(drawer);
     for (EffectDefs.Layer layer : EffectDefs.Layer.values()) {
       if (!layer.below()) drawLayer(drawer, proj, view, layer, alpha);
     }
+    drawBeams(proj, view, alpha);
     art.end();
+  }
+
+  /**
+   * Whether the renderer draws the Object layer of effects on the ground y-sorted with the units
+   * ({@link #drawObjects}); {@link #drawAbove} then leaves them out.
+   */
+  private boolean objectsSorted;
+
+  /** The screen y band {@link #drawLayer} keeps ground-level Object parts to: (lo, hi]. */
+  private float sortLo = Float.NaN, sortHi;
+
+  void sortObjectsWithUnits() {
+    objectsSorted = true;
+  }
+
+  /**
+   * Draws the Object-layer parts of the effects standing on the ground whose anchor's screen y lies
+   * in {@code (lo, hi]} (§7: the Object layer is y-sorted together with the units), called by the
+   * renderer between its ground poses, far first. False when there was nothing to draw (the batch
+   * is then untouched).
+   */
+  boolean drawObjects(
+      ScDrawer drawer,
+      ArtProjection proj,
+      ViewOrientation view,
+      float seconds,
+      float lo,
+      float hi) {
+    float alpha = alphaOf(seconds);
+    boolean any = false;
+    for (Instance in : instances) {
+      if (in.liftGame != 0) continue;
+      float y = proj.y(view, in.anchorY(alpha));
+      if (!(y > lo && y <= hi)) continue;
+      for (Run r : in.runs) {
+        any |= r.started && !r.done && r.part.layer() == EffectDefs.Layer.OBJECT;
+      }
+    }
+    if (!any) return false;
+    beginArt(drawer);
+    sortLo = lo;
+    sortHi = hi;
+    drawLayer(drawer, proj, view, EffectDefs.Layer.OBJECT, alpha);
+    sortLo = Float.NaN;
+    art.end();
+    return true;
   }
 
   /** Frees the effect shader. */
@@ -1458,6 +1702,14 @@ public final class EffectLayer {
     float ppdu = proj.pixelsPerDisplayUnit();
     boolean shadow = layer == EffectDefs.Layer.SHADOW;
     for (Instance in : instances) {
+      if (layer == EffectDefs.Layer.OBJECT && objectsSorted && in.liftGame == 0) {
+        // the renderer draws these among the units, each in its band of screen y
+        if (Float.isNaN(sortLo)) continue;
+        float y = proj.y(view, in.anchorY(alpha));
+        if (!(y > sortLo && y <= sortHi)) continue;
+      } else if (!Float.isNaN(sortLo)) {
+        continue;
+      }
       // a shadow lies on the ground under a lifted effect
       float lift = shadow ? 0f : proj.height(in.liftGame);
       for (Run r : in.runs) {
