@@ -63,6 +63,11 @@ public final class ArtCache {
     return Optional.of(new ArtCache(content.get()));
   }
 
+  /** The cache at that folder (a content folder, or a root holding {@code current.json}). */
+  public static Optional<ArtCache> locateIn(Path root) {
+    return contentFolder(root).map(ArtCache::new);
+  }
+
   static Optional<Path> contentFolder(Path root) {
     if (Files.isDirectory(root.resolve("sc"))) return Optional.of(root);
     Path current = root.resolve("current.json");

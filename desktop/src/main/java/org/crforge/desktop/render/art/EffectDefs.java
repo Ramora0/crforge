@@ -81,6 +81,7 @@ final class EffectDefs {
     float rotMinSpeed, rotMaxSpeed;
     boolean loopClip, playClipOnce;
     boolean noBounce, stopOnBounce;
+    boolean relativeAngle;
   }
 
   /**
@@ -256,6 +257,7 @@ final class EffectDefs {
     e.playClipOnce = n.path("PlayParticleClipOnce").asBoolean(false);
     e.noBounce = n.path("NoBounce").asBoolean(false);
     e.stopOnBounce = n.path("StopOnBounce").asBoolean(false);
+    e.relativeAngle = n.path("ParticleAngleRelativeToParent").asBoolean(false);
     return e;
   }
 

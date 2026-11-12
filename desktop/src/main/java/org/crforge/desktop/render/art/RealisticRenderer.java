@@ -303,22 +303,12 @@ public final class RealisticRenderer implements Disposable {
     float fx = view.x((float) (e.x() + e.headingX())) - view.x((float) e.x());
     float fy = view.y((float) (e.y() + e.headingY())) - view.y((float) e.y());
     if (fx * fx + fy * fy < 1e-4f) return;
-    st.facingDegrees = (float) Math.toDegrees(Math.atan2(fx, fy)); // 0 up, +90 right, ±180 down
-  }
-
-  /** Facing export index (1..n) and mirroring for an action with n half-circle exports (§2). */
-  private static int[] facingExport(float theta, int n) {
-    if (n <= 1) return new int[] {1, 0};
-    float step = 180f / (n - 1);
-    int dir = Math.round(Math.abs(theta) / step) + 1;
-    dir = Math.max(1, Math.min(n, dir));
-    boolean flip = theta < 0 && dir != 1 && dir != n;
-    return new int[] {dir, flip ? 1 : 0};
+    st.facingDegrees = ArtRules.facingDegrees(fx, fy);
   }
 
   /** A turret's timeline frame (0-based) for its facing over a mirrored half circle. */
   private static int[] halfCircleFrame(float theta, int n) {
-    int[] f = facingExport(theta, n);
+    int[] f = ArtRules.facingExport(theta, n);
     return new int[] {f[0] - 1, f[1]};
   }
 
@@ -363,8 +353,10 @@ public final class RealisticRenderer implements Disposable {
         if (atk != null && atk[1] > 0 && unit.has("attack" + (atk[1] + 1))) {
           clipName = "attack" + (atk[1] + 1);
         }
-        float t = attackClipTime(unit, clipName, atk, tickAlpha);
-        if (t >= 0) {
+        float t = atk == null ? -1f : attackClipTime(unit, clipName, atk, tickAlpha);
+        if (atk == null) {
+          action = clipName; // no timer to line up with: loop the clip
+        } else if (t >= 0) {
           action = clipName;
           clipTime = t;
         } else {
@@ -379,7 +371,7 @@ public final class RealisticRenderer implements Disposable {
     if (!unit.has(action)) action = unit.has("idle") ? "idle" : action;
     if (e.shield() > 0 && unit.has("shield:" + action)) action = "shield:" + action;
     int n = unit.directions(action);
-    int[] df = facingExport(st.facingDegrees, Math.max(1, n));
+    int[] df = ArtRules.facingExport(st.facingDegrees, Math.max(1, n));
     int id = unit.animation(action, df[0]);
     if (id < 0) id = unit.anyExport;
     if (id < 0) return;
@@ -588,10 +580,11 @@ public final class RealisticRenderer implements Disposable {
     transform.setToTranslation(q.x(), q.groundY());
     transform.scale(q.scale(), -q.scale());
     transform.translate(ox, oy);
+    // cast towards the viewer: the silhouette mirrored below the feet, its far end leaning left
     local.idt();
-    local.m01 = skew; // the top leans with the light: x += skew * y (y down)
+    local.m01 = -skew; // x -= skew * y, y down after the mirror
     transform.mul(local);
-    transform.scale(sxs, sys);
+    transform.scale(sxs, -sys);
     if (q.flip()) transform.scale(-1, 1);
     tint.set(shadowColor.r, shadowColor.g, shadowColor.b, shadowColor.a * q.alpha());
     if (q.overrides() != null) {

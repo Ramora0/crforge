@@ -377,9 +377,17 @@ public class WorkspaceSmoke extends CRForgeGame {
       if (frames == 88) {
         require(labels(stage().getRoot()).contains("Skeleton #"), "inspector shows the skeleton");
         capture("crowd-inspected");
+        // the realistic view (the game's own art, when an art cache exists on this machine)
+        key(Input.Keys.X);
+      }
+      if (frames == 92) {
+        capture("realistic");
+        key(Input.Keys.X);
+      }
+      if (frames == 94) {
         System.out.println(
             "UI_SMOKE_OK: workspace, replay, status badges/inspector/pause/step/toggle/expiry/flip,"
-                + " crowd");
+                + " crowd, realistic");
         Gdx.app.exit();
       }
     } catch (Throwable failure) {

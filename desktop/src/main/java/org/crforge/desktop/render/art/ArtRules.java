@@ -6,54 +6,37 @@
 
 package org.crforge.desktop.render.art;
 
-import org.crforge.core.pathfinding.GridEntityState;
-import org.crforge.desktop.battle.EntityView;
-
 /**
- * The few rules the game's art does not state in its tables: the art's scale against the tile grid,
- * which animation a state plays and which of the facing exports a heading picks. See
- * docs/realistic-rendering.md for the evidence behind each.
+ * The facing rule the game's art follows (docs/realistic-rendering.md §2): an action's {@code n}
+ * facing exports cover the right half of the circle, {@code _1} facing up the screen (away from
+ * the viewer) to {@code _n} facing down it, and the left half reuses them mirrored.
  */
 public final class ArtRules {
 
   private ArtRules() {}
 
-  /** Display units of the art per arena tile. */
-  public static final float DISPLAY_UNITS_PER_TILE = 30f;
-
   /**
-   * Facing exports per action, {@code _1} (facing away, up the screen) to {@code _9} (facing the
-   * viewer).
+   * The facing angle of a vector on screen (x right, y up): 0 up, +90 right, ±180 down.
+   *
+   * @param fx the facing's x
+   * @param fy the facing's y, up the screen
    */
-  public static final int DIRECTIONS = 9;
-
-  /** Whether the facing exports between up and down face right (else left) before mirroring. */
-  public static final boolean ART_FACES_RIGHT = true;
-
-  /** The animation a unit plays in its state: {@code run}, {@code attack} or {@code idle}. */
-  public static String action(EntityView e) {
-    return switch (e.state()) {
-      case GridEntityState.MOVING,
-          GridEntityState.DASHING,
-          GridEntityState.JUMPING,
-          GridEntityState.SPAWN_PATHFIND,
-          GridEntityState.INGAME_PATHFIND,
-          GridEntityState.ROUTE_FOLLOWING_ALTERNATE ->
-          "run";
-      case GridEntityState.ATTACKING -> "attack";
-      default -> "idle";
-    };
+  public static float facingDegrees(float fx, float fy) {
+    return (float) Math.toDegrees(Math.atan2(fx, fy));
   }
 
   /**
-   * The facing export ({@code 1..DIRECTIONS}) and whether to mirror it, for a facing vector in
-   * world pixels (x right, y up).
+   * The facing export ({@code 1..n}) and whether to mirror it for a facing angle, for an action
+   * with {@code n} facing exports.
+   *
+   * @return {@code {export, 1 when mirrored else 0}}
    */
-  public static int[] direction(float fx, float fy) {
-    double theta = Math.atan2(Math.abs(fx), fy); // 0 = up the screen, PI = down
-    int dir = 1 + (int) Math.round(theta / Math.PI * (DIRECTIONS - 1));
-    boolean flip = ART_FACES_RIGHT ? fx < 0 : fx > 0;
-    if (dir == 1 || dir == DIRECTIONS) flip = false;
-    return new int[] {Math.max(1, Math.min(DIRECTIONS, dir)), flip ? 1 : 0};
+  public static int[] facingExport(float degrees, int n) {
+    if (n <= 1) return new int[] {1, 0};
+    float step = 180f / (n - 1);
+    int dir = Math.round(Math.abs(degrees) / step) + 1;
+    dir = Math.max(1, Math.min(n, dir));
+    boolean flip = degrees < 0 && dir != 1 && dir != n;
+    return new int[] {dir, flip ? 1 : 0};
   }
 }

@@ -11,6 +11,7 @@ import com.badlogic.gdx.Input;
 /** Semantic workspace commands shared by toolbar controls and keyboard bindings. */
 public enum WorkspaceAction {
   PAUSE,
+  REALISTIC,
   STEP,
   STEP_BACK,
   TOGGLE_INSPECT,
@@ -51,6 +52,7 @@ public enum WorkspaceAction {
   public static WorkspaceAction fromKey(int key) {
     return switch (key) {
       case Input.Keys.SPACE -> PAUSE;
+      case Input.Keys.X -> REALISTIC;
       case Input.Keys.PERIOD -> STEP;
       case Input.Keys.COMMA -> STEP_BACK;
       case Input.Keys.I -> TOGGLE_INSPECT;

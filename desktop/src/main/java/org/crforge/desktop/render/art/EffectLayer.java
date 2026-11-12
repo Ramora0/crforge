@@ -45,9 +45,17 @@ import org.crforge.desktop.render.ViewOrientation;
  *   <li>a new area effect plays its {@code OneShotEffect}, the {@code Effect} of the spell of the
  *       same name, its {@code LoopingEffect} and its {@code ScaledEffect} (scaled to its radius)
  *       for as long as it lives;
+ *   <li>a new projectile's shooter (the closest character of its side holding a target) plays its
+ *       {@code ProjectileEffect} at the launch;
  *   <li>a character whose hit points drop next to an enemy attacking it plays that attacker's
- *       {@code DamageEffect}.
+ *       {@code DamageEffect}, or, with {@link #observer()} added to the battle's world, every hit
+ *       plays its attacker's, and area effects too short-lived for any frame (Zap) still play.
  * </ul>
+ *
+ * <p>Effects are drawn through {@link EffectDrawer}, which applies the colour transforms' added
+ * colour that much effect art relies on. Environment hooks for testing: {@code CRFORGE_FXDEBUG}
+ * logs every effect played; {@code CRFORGE_FXTEST=name@tick@x@y[@side];...} plays effects (or
+ * {@code aeo:Row} area effects) at fixed ticks and places.
  *
  * <p>Each effect part is an SC2 export played once at its clip rate (or looped while its owner
  * lives), or a particle emitter simulated in display units: positions on the ground plane in du
@@ -127,6 +135,9 @@ public final class EffectLayer {
 
     final boolean red;
     float ax, ay, pax, pay;
+
+    /** The parent's facing on screen, degrees clockwise from +x, for parent-relative emitters. */
+    float angle;
     boolean ownerGone;
     double ownerGoneAt = Double.MAX_VALUE;
     final Run[] runs;
@@ -241,13 +252,13 @@ public final class EffectLayer {
       EntityView p = before.get(e.id());
       boolean red = !view.blue(e.side());
       if (p == null) {
-        appeared(e, red, now);
+        appeared(e, frame, red, now, view);
       } else if (!observed && e.isCharacter() && e.hitPoints() < p.hitPoints()) {
-        damaged(e, frame, red, now);
+        damaged(e, frame, red, now, view);
       }
     }
     for (EntityView p : previous.entities()) {
-      if (!after.containsKey(p.id())) vanished(p, !view.blue(p.side()), now);
+      if (!after.containsKey(p.id())) vanished(p, !view.blue(p.side()), now, view);
     }
     for (EntityView e : frame.entities()) {
       if (e.kind() == EntityView.Kind.AREA_EFFECT) seenAreas.add(e.id());
@@ -367,10 +378,16 @@ public final class EffectLayer {
     }
     EntityView victim = after.get(ev.victim());
     float lift = victim == null ? 0 : lift(character(victim.name()), victim);
-    play(text(character(ev.name()), "DamageEffect"), red, now, ev.x(), ev.y(), -1, 1f, lift);
+    EntityView attacker = after.get(ev.id());
+    int fx = attacker == null ? ev.x() : attacker.x();
+    int fy = attacker == null ? ev.y() : attacker.y();
+    playFacing(
+        text(character(ev.name()), "DamageEffect"), red, now, ev.x(), ev.y(), lift, view, fx, fy,
+        ev.x(), ev.y());
   }
 
-  private void appeared(EntityView e, boolean red, double now) {
+  private void appeared(
+      EntityView e, BattleFrame frame, boolean red, double now, ViewOrientation view) {
     switch (e.kind()) {
       case TROOP, BUILDING -> {
         GameRow row = character(e.name());
@@ -379,6 +396,7 @@ public final class EffectLayer {
       case PROJECTILE -> {
         GameRow row = row("projectiles", e.name());
         play(text(row, "TrailEffect"), red, now, e.x(), e.y(), e.id(), 1f, 0);
+        launched(e, frame, red, now, view);
       }
       case AREA_EFFECT -> {
         GameRow row = row("area_effect_objects", e.name());
@@ -397,7 +415,7 @@ public final class EffectLayer {
     }
   }
 
-  private void vanished(EntityView p, boolean red, double now) {
+  private void vanished(EntityView p, boolean red, double now, ViewOrientation view) {
     switch (p.kind()) {
       case TROOP, BUILDING -> {
         GameRow row = character(p.name());
@@ -425,7 +443,7 @@ public final class EffectLayer {
             y = p.aimY();
           }
         }
-        play(text(row, "HitEffect"), red, now, x, y, -1, 1f, 0);
+        playFacing(text(row, "HitEffect"), red, now, x, y, 0, view, p.x(), p.y(), x, y);
       }
       default -> {}
     }
@@ -462,8 +480,39 @@ public final class EffectLayer {
     }
   }
 
+  /**
+   * A projectile appeared: its shooter, the closest character of its side that holds a target
+   * (towers included), plays its {@code ProjectileEffect} at the projectile's start, lifted to the
+   * shooter's flying height or a tower's turret, facing the aim.
+   */
+  private void launched(EntityView p, BattleFrame frame, boolean red, double now, ViewOrientation view) {
+    EntityView best = null;
+    long bestD = 2500L * 2500L;
+    for (EntityView a : frame.entities()) {
+      if (!a.isCharacter() || a.side() != p.side() || !a.hasTarget()) continue;
+      long dx = a.x() - p.x(), dy = a.y() - p.y();
+      long d = dx * dx + dy * dy;
+      if (d < bestD) {
+        bestD = d;
+        best = a;
+      }
+    }
+    if (best == null) return;
+    GameRow row = character(best.name());
+    String effect = text(row, "ProjectileEffect");
+    if (effect == null) return;
+    float lift =
+        best.air()
+            ? RealisticRenderer.integer(row, "FlyingHeight", 0)
+            : RealisticRenderer.integer(row, "AttachedCharacterHeight", 0);
+    int ax = p.aimX() != 0 || p.aimY() != 0 ? p.aimX() : best.targetX();
+    int ay = p.aimX() != 0 || p.aimY() != 0 ? p.aimY() : best.targetY();
+    playFacing(effect, red, now, p.x(), p.y(), lift, view, p.x(), p.y(), ax, ay);
+  }
+
   /** A hit landed on {@code e}: the closest enemy attacking it plays its DamageEffect on it. */
-  private void damaged(EntityView e, BattleFrame frame, boolean targetRed, double now) {
+  private void damaged(
+      EntityView e, BattleFrame frame, boolean targetRed, double now, ViewOrientation view) {
     EntityView best = null;
     long bestD = Long.MAX_VALUE;
     for (EntityView a : frame.entities()) {
@@ -486,15 +535,9 @@ public final class EffectLayer {
     }
     if (best == null) return;
     GameRow row = character(best.name());
-    play(
-        text(row, "DamageEffect"),
-        !targetRed,
-        now,
-        e.x(),
-        e.y(),
-        -1,
-        1f,
-        lift(character(e.name()), e));
+    playFacing(
+        text(row, "DamageEffect"), !targetRed, now, e.x(), e.y(), lift(character(e.name()), e),
+        view, best.x(), best.y(), e.x(), e.y());
   }
 
   /** The cast effect of the spell row named like an area effect (Lightning, Zap, ...). */
@@ -506,7 +549,7 @@ public final class EffectLayer {
     return null;
   }
 
-  private void play(
+  private Instance play(
       String name,
       boolean red,
       double now,
@@ -521,7 +564,7 @@ public final class EffectLayer {
           "fx %.2f %s %s at %d,%d%n",
           now, name, fx == null ? "(nothing to draw)" : fx.parts().size() + " parts", gx, gy);
     }
-    if (fx == null) return;
+    if (fx == null) return null;
     // a one-shot does not follow; a looping one follows its owner and ends with it
     int f = follow;
     if (!fx.loop() && follow >= 0) {
@@ -535,6 +578,23 @@ public final class EffectLayer {
       in.ownerGoneAt = now + 2.0;
     }
     add(in);
+    return in;
+  }
+
+  /** Plays an effect facing from (fx, fy) towards (tx, ty), game units. */
+  private void playFacing(
+      String name, boolean red, double now, int gx, int gy, float liftGame,
+      ViewOrientation view, int fx, int fy, int tx, int ty) {
+    Instance in = play(name, red, now, gx, gy, -1, 1f, liftGame);
+    if (in != null) in.angle = screenAngle(view, fx, fy, tx, ty);
+  }
+
+  /** Direction from one game point to another on screen, degrees clockwise from +x (y down). */
+  private static float screenAngle(ViewOrientation view, int fx, int fy, int tx, int ty) {
+    float dx = view.x((float) tx) - view.x((float) fx);
+    float dy = -(view.y((float) ty) - view.y((float) fy)) * GROUND_SQUASH;
+    if (dx * dx + dy * dy < 1e-3f) return 0;
+    return (float) Math.toDegrees(Math.atan2(dy, dx));
   }
 
   private void add(Instance in) {
@@ -665,6 +725,7 @@ public final class EffectLayer {
                   * ((index % em.count) + rng.nextFloat() * 0.3f)
                   / em.count;
     }
+    if (em.relativeAngle) angle += in.angle;
     double rad = Math.toRadians(angle);
     float cx = (float) Math.cos(rad), cy = (float) Math.sin(rad) * GROUND_SQUASH;
     float radius = rand(em.minRadius, em.maxRadius) * RADIUS_DU;

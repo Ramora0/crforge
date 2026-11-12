@@ -130,6 +130,8 @@ public final class BattleHud implements Disposable {
   private final Map<String, BarStyle> barStyles = new HashMap<>();
   private final Map<String, Optional<BarPlace>> places = new HashMap<>();
   private final Map<String, Optional<CardArt>> cardArts = new HashMap<>();
+  private final Map<Integer, EntityView> before = new HashMap<>();
+  private float alpha = 1f;
   private GameTables tables;
   private boolean tablesTried;
   private boolean stylesLoaded;
@@ -172,6 +174,27 @@ public final class BattleHud implements Disposable {
       int width,
       int height,
       Matrix4 projection) {
+    draw(frame, null, 1f, view, proj, width, height, projection);
+  }
+
+  /**
+   * Draws the HUD of {@code frame}, the units' bars at their positions interpolated from {@code
+   * previous} (may be null) by {@code alpha} in [0, 1], as the renderer places their sprites.
+   */
+  public void draw(
+      BattleFrame frame,
+      BattleFrame previous,
+      float alpha,
+      ViewOrientation view,
+      ArtProjection proj,
+      int width,
+      int height,
+      Matrix4 projection) {
+    before.clear();
+    if (previous != null && alpha < 1f) {
+      for (EntityView e : previous.entities()) before.put(e.id(), e);
+    }
+    this.alpha = alpha;
     ScScene ui = cache.scene("sc/ui.sc");
     if (ui == null || frame == null) return;
     tables();
@@ -240,8 +263,11 @@ public final class BattleHud implements Disposable {
     if (id < 0) return;
 
     float ppdu = p.pixelsPerDisplayUnit();
-    float x = p.x(view, e.x());
-    float ground = p.y(view, e.y());
+    EntityView prev = before.get(e.id());
+    float gx = prev == null ? e.x() : prev.x() + (e.x() - prev.x()) * alpha;
+    float gy = prev == null ? e.y() : prev.y() + (e.y() - prev.y()) * alpha;
+    float x = p.x(view, gx);
+    float ground = p.y(view, gy);
     VisualLookup.Unit unit = lookup.unit(e.name(), blue);
     if (e.air() && unit != null) ground += p.height(unit.flyingHeight);
     float topDu = place != null ? place.topDu() : -60f;

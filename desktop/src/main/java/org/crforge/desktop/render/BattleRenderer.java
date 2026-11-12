@@ -146,6 +146,33 @@ public class BattleRenderer {
 
   private final Map<String, String> displayNames = new HashMap<>();
 
+  /** The game's own art in place of the debug shapes (key X), when an art cache exists. */
+  private org.crforge.desktop.render.art.RealisticView realistic;
+
+  private boolean realisticOn = Boolean.getBoolean("crforge.realistic");
+  private boolean realisticTried;
+
+  public void toggleRealistic() {
+    realisticOn = !realisticOn;
+  }
+
+  public boolean isRealistic() {
+    return realisticOn && realisticView() != null;
+  }
+
+  private org.crforge.desktop.render.art.RealisticView realisticView() {
+    if (!realisticTried) {
+      realisticTried = true;
+      realistic = org.crforge.desktop.render.art.RealisticView.create().orElse(null);
+    }
+    return realistic;
+  }
+
+  /** Hands the realistic view the tick state the frame does not carry. */
+  public void feedRealistic(org.crforge.desktop.battle.BattleSession session) {
+    if (isRealistic()) realistic.feed(session);
+  }
+
   public void toggleDrawStatuses() {
     drawStatuses = !drawStatuses;
   }
@@ -340,6 +367,13 @@ public class BattleRenderer {
     HudText hud = HudText.of(frame, inputs.view(), statusLines(inputs));
 
     if (legacyHud) backgrounds.renderBackgrounds(camera);
+    if (isRealistic()) {
+      realistic.draw(frame, inputs.world().getRecords().tables(), tileMap, view, camera);
+      renderFocused(frame);
+      renderInspection(frame);
+      if (legacyHud) renderHud(frame, camera, inputs, hud);
+      return;
+    }
     arena.render(tileMap, view, drawGrid);
     if (drawCellCosts) {
       cellCosts.render(inputs.world().getGrid(), inputs.hoverCellX(), inputs.hoverCellY(), view);
