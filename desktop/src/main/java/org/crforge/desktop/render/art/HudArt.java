@@ -73,8 +73,8 @@ final class HudArt implements Disposable {
 
   /**
    * Premultiplied texture times premultiplied vertex colour, plus the additive colour, then mixed
-   * toward its own luminance by {@code u_gray} and washed toward white by 0.4 of it (the game's
-   * pale grey for the hand's unaffordable cards).
+   * toward its own luminance by {@code u_gray}: the client's {@code Grayscale} state of a button
+   * the player cannot afford (ability_button.toml), for the hand's unaffordable cards too.
    */
   private static final String FRAGMENT =
       "#ifdef GL_ES\nprecision mediump float;\n#endif\n"
@@ -87,7 +87,6 @@ final class HudArt implements Disposable {
           + "  vec4 c = v_color * texture2D(u_texture, v_texCoords);\n"
           + "  c.rgb = min(c.rgb + u_add * c.a, vec3(c.a));\n"
           + "  c.rgb = mix(c.rgb, vec3(dot(c.rgb, vec3(0.299, 0.587, 0.114))), u_gray);\n"
-          + "  c.rgb = mix(c.rgb, vec3(c.a), u_gray * 0.4);\n"
           + "  gl_FragColor = c;\n"
           + "}\n";
 
@@ -154,8 +153,8 @@ final class HudArt implements Disposable {
   }
 
   /**
-   * How far what is drawn next is turned to a pale grey, 0 (its colours) to 1 (its luminance,
-   * washed 40% toward white), until changed again; {@link #begin} resets it to 0.
+   * How far what is drawn next is turned to grey, 0 (its colours) to 1 (its luminance), until
+   * changed again; {@link #begin} resets it to 0.
    */
   void setGray(float amount) {
     if (shader == null) return;

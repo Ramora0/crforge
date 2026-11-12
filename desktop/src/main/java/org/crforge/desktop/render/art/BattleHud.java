@@ -639,7 +639,7 @@ public final class BattleHud implements Disposable {
   /** Opacity of the elixir pip being filled, over the bar's dark back. */
   private static final float PIP_FILLING_ALPHA = 0.45f;
 
-  /** How far an unaffordable card is turned to the game's pale grey. */
+  /** How far an unaffordable card is turned grey (the client's Grayscale button state). */
   private static final float UNAFFORDABLE_GRAY = 1f;
 
   private void drawPanel(
