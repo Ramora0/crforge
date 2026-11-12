@@ -38,11 +38,27 @@ def main(argv: list[str] | None = None) -> int:
     ex.add_argument("--only", nargs="+", metavar="NAME", help="extract just these .sc files (e.g. chr_knight.sc)")
     ex.add_argument("--audio", action="store_true",
                     help="also decode the battle sound banks (needs libvorbis)")
+    ex.add_argument("--force-audio", action="store_true",
+                    help="with --audio: decode every bank again (e.g. after a tool update)")
     au = sub.add_parser("audio", help="mix a recording's sound events (VIDEO.sounds.jsonl) into it")
     au.add_argument("video", help="a video written by the desktop's --record")
     au.add_argument("--out", help="output video (default: <video>_audio.mp4)")
     au.add_argument("--cache", default=DEFAULT_OUT, help=f"cache root (default {DEFAULT_OUT})")
     au.add_argument("--no-music", action="store_true", help="sound effects only")
+    au.add_argument("--overtime-at", type=float, metavar="SECONDS",
+                    help="switch to the sudden-death music at this video time")
+    au.add_argument("--sfx-db", type=float, default=0.0, help="sound effects gain, dB (default 0)")
+    au.add_argument("--music-db", type=float, default=0.0, help="music gain, dB (default 0)")
+    au.add_argument("--seed", type=int, default=0, help="random seed of sample/pitch choices")
+    au.add_argument("--no-normalize", action="store_true",
+                    help="keep the game's absolute levels (default: normalize to about -16 LUFS)")
+    au.add_argument("--clock", type=float, metavar="SECONDS_LEFT",
+                    help="seconds left in regulation at the video's start (180 = battle start): adds "
+                         "the game's timed sounds (60/30 s warnings, countdown, music changes)")
+    au.add_argument("--location", default="PvP_royal",
+                    help="locations.csv row for the start jingle / overtime music (default PvP_royal)")
+    au.add_argument("--report", action="store_true",
+                    help="list each recorded event and how it was resolved (exact / fallback)")
     args = ap.parse_args(argv)
 
     if args.cmd == "audio":
@@ -54,7 +70,10 @@ def main(argv: list[str] | None = None) -> int:
         current = root / "current.json"
         if current.exists():
             root = root / _json.loads(current.read_text())["content_sha"]
-        audio.mix(Path(args.video), root, Path(args.out) if args.out else None, music=not args.no_music)
+        audio.mix(Path(args.video), root, Path(args.out) if args.out else None, music=not args.no_music,
+                  sfx_db=args.sfx_db, music_db=args.music_db, seed=args.seed,
+                  overtime_at=args.overtime_at, normalize=not args.no_normalize, report=args.report,
+                  clock=args.clock, location=args.location)
         return 0
 
     from . import extract, sources
@@ -71,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.audio:
             from . import audio
 
-            audio.extract(src, res.root)
+            audio.extract(src, res.root, force=args.force_audio)
     finally:
         src.close()
 

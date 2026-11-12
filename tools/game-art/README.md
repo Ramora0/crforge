@@ -78,6 +78,19 @@ The scene JSON format is documented in the docstring of [`crforge_art/scene.py`]
 
 `all` extracts every `.sc` file in the game. If a referenced file is missing, it is reported as a warning. This is normal, because some arenas ship as later downloads that are not in the APK.
 
+## Sound
+
+```sh
+uv run crforge-art extract --apk ... --audio [--force-audio]   # decode the battle sound banks
+uv run crforge-art audio battle.mp4 [--clock 180] [--overtime-at S] [--report]
+```
+
+`--audio` decodes the battle sound banks (`card_*`, `ui_battle_*`, the general battle music, the arena jingles, `ui_menu_general`, `uncategorized`, `emoji`, `ui_hero_form`) into `<content_sha>/audio/<bank>/<sample>.ogg`. It also reads the banks' FMOD Studio metadata and resolves every event into `audio/index.json`. The metadata gives the samples each event plays (and the weight of each one in a random pick), the volume (instrument, audio track, event master and mixer buses, in dB), the pitch, the random volume and pitch modulators, the trigger delay and probability, the max instances and the cooldown. The format notes are in [`crforge_art/fmod.py`](crforge_art/fmod.py). The index layout is in the docstring of [`crforge_art/audio.py`](crforge_art/audio.py). Event paths come from `clashroyale.strings.bank` and the mixer bus volumes from `clashroyale.bank`. Older caches (index without `"format": 2`) are redone on the next `--audio` run.
+
+`audio VIDEO` mixes `VIDEO.sounds.jsonl` (written by the desktop recorder) into `VIDEO_audio.mp4`. Each `soundbanks/<bank>/<event>` reference is looked up as `<bank>/<event>` in the events table. A reference that isn't in the table falls back to a guess from the sample names. Instances follow the event's max-instances limit (the oldest one is cut) and its cooldown. On top of that, one event can't restart within 30 ms, so a volley plays once. Music events (banks `music_arena_*`) switch the looping battle music. Without them, `music_arena_general_battle` loops from 0. `--clock SECONDS_LEFT` adds the sounds the game times itself, from `client_globals.csv` and `music.csv`: the 60 s / 30 s warnings, the 10..1 countdown, BattleMusic → 60sec_loop → 30sec_loop, and the location's start jingle. `--overtime-at` adds the sudden-death music and the extra-time jingle. The mix is normalized to about -16 LUFS and peak-limited at -1 dBFS (`--no-normalize` keeps the game's absolute levels). `--report` lists how each recorded event was resolved.
+
+Known gaps: parameter sheets play their first instrument, nested events only their first layer, and snapshots, VCAs, effects and 3D panning are ignored. The stealing mode is inferred: flags 0 drop the new instance, any other value cuts the oldest.
+
 ## Tests
 
 ```sh

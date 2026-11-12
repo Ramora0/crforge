@@ -52,6 +52,9 @@ public final class CinematicRecorder extends ApplicationAdapter {
   private RealisticRenderer renderer;
   private BattleHud hud;
   private EffectLayer effects;
+  private BattleSounds battleSounds;
+  private float overtimeAt = -1;
+  private int startLeftMs = -1;
   private FrameBuffer fbo;
   private OrthographicCamera camera;
   private ReplayPlayer player;
@@ -122,6 +125,8 @@ public final class CinematicRecorder extends ApplicationAdapter {
     // every hit and every short-lived area effect (a Zap lives 1 ms), as the battle reports them
     session.getBattle().getWorld().addObserver(effects.observer());
     session.getBattle().getWorld().addObserver(renderer.observer());
+    battleSounds = new BattleSounds(cache, tables, view, arena.locationName());
+    session.getBattle().getWorld().addObserver(battleSounds);
 
     // fast-forward to the start
     int startTick = Math.round(settings.fromSeconds() * TICKS_PER_SECOND);
@@ -135,6 +140,9 @@ public final class CinematicRecorder extends ApplicationAdapter {
     effects.update(current, null, tables, view);
     soundOrigin = current.tick() * 0.05f;
     sounds.addAll(effects.drainSounds());
+    battleSounds.drain(); // what the fast-forward heard
+    if (settings.fromSeconds() <= 0.01f) battleSounds.matchStart(arena.locationName(), soundOrigin);
+    startLeftMs = current.overtime() ? -1 : Math.max(0, 180_000 - current.timeMs());
     previous = current;
     still = settings.out().toString().toLowerCase().endsWith(".png");
     framesWanted = still ? 1 : Math.round(settings.seconds() * settings.fps());
@@ -215,6 +223,8 @@ public final class CinematicRecorder extends ApplicationAdapter {
             BattleAdapter.projectileFlights(player.getSession()));
         effects.update(current, previous, tables, view);
         sounds.addAll(effects.drainSounds());
+        sounds.addAll(battleSounds.drain());
+        if (current.overtime() && overtimeAt < 0) overtimeAt = current.tick() * 0.05f;
       }
       float alpha = still ? 1f : (subFrame + 1f) / perTick;
       drawFrame(alpha);
@@ -331,6 +341,13 @@ public final class CinematicRecorder extends ApplicationAdapter {
     java.nio.file.Path out =
         settings.out().resolveSibling(settings.out().getFileName() + ".sounds.jsonl");
     StringBuilder sb = new StringBuilder();
+    // the battle clock, for the mixer's timed sounds and music (warnings, countdown, overtime)
+    if (startLeftMs >= 0) {
+      sb.append(String.format(java.util.Locale.ROOT, "{\"t\": 0.000, \"clock\": %.3f}%n", startLeftMs / 1000f));
+    }
+    if (overtimeAt >= 0) {
+      sb.append(String.format(java.util.Locale.ROOT, "{\"t\": %.3f, \"overtime\": true}%n", overtimeAt - soundOrigin));
+    }
     for (String[] s : sounds) {
       float t = Float.parseFloat(s[0]) - soundOrigin;
       if (t < 0 || s[1] == null || s[1].isEmpty()) continue;
