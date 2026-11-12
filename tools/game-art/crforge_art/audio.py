@@ -29,8 +29,17 @@ Mixing (`crforge-art audio VIDEO`): the recorder writes `VIDEO.sounds.jsonl` (on
 `{"t": seconds, "sound": "soundbanks/<bank>/<event>"}` per sound). `<bank>/<event>` keys the
 events table; refs it lacks fall back to a sample-name heuristic (`samples_for`). Music events
 (banks `music_arena_*`) switch the looping battle music instead of playing once; without any, the
-general battle music (`music_arena_general_battle`) loops from the start. The mix is normalized to
-about -16 LUFS and peak-limited.
+general battle music (`music_arena_general_battle`) loops from the start. A line `{"t": s, "end":
+true}` is the match's end: the battle music stops there (the end jingles are ordinary sounds) and no
+timed battle sound (countdown, music change) plays after it. The mix is normalized to about -16 LUFS
+and peak-limited.
+
+Thinning (INFERRED, ours; the banks' own instance limits and cooldowns are applied first): a
+repeated short sound would otherwise stack into a machine-gun clatter in swarms, so
+- footsteps and wing flaps (events ending `_steps`, `_step`, `_wing`) start at most every
+  STEP_GAP seconds per event and play FOOTSTEP_DB quieter;
+- voice lines (`_vo`) start at most every VO_GAP seconds per event;
+- each instance of an event still playing lowers a new one by STACK_DB (at most STACK_MAX_DB).
 """
 from __future__ import annotations
 
@@ -51,8 +60,16 @@ BATTLE_BANKS = ("card_", "ui_battle_", "music_arena_general_battle", "music_jing
 STRINGS_BANK = "soundbanks/clashroyale.strings.bank"
 MASTER_BANK = "soundbanks/clashroyale.bank"
 BATTLE_MUSIC = "music_arena_general_battle/music_arena_general_battle"
+SILENCE = "music_arena_silence/silence"  # a music cue that stops the music (ours)
 MIN_GAP = 0.03  # ours, not the game's: one event restarting within 30 ms only phases/stacks
 FALLBACK_DB = -12.0  # a heuristic match's volume (the metadata's typical instrument volume)
+# thinning (INFERRED, see the module doc)
+STEP_GAP = 0.3
+FOOTSTEP_DB = -4.0
+VO_GAP = 2.0
+STACK_DB = -2.0
+STACK_MAX_DB = -6.0
+MUSIC_END_FADE = 0.4  # seconds the battle music fades out over at the match's end
 
 
 def _find_library_with_homebrew():
@@ -305,6 +322,7 @@ def mix(video: Path, cache_root: Path, out: Path | None = None, music: bool = Tr
     decoded: dict = {}
     rng = np.random.default_rng(seed)
     refs = []
+    end_at: float | None = None
     if events_path.exists():
         for line in events_path.read_text().splitlines():
             if not line.strip():
@@ -316,8 +334,11 @@ def mix(video: Path, cache_root: Path, out: Path | None = None, music: bool = Tr
                 clock = float(ev["clock"]) + float(ev["t"])
             elif ev.get("overtime") and overtime_at is None:  # {"t", "overtime": true}
                 overtime_at = float(ev["t"])
+            elif ev.get("end") and end_at is None:  # {"t", "end": true}
+                end_at = float(ev["t"])
     if clock is not None or overtime_at is not None:
-        refs.extend(battle_schedule(cache_root, clock, dur, overtime_at, location))
+        timed = battle_schedule(cache_root, clock, dur, overtime_at, location, index)
+        refs.extend((t, ref) for t, ref in timed if end_at is None or t < end_at)
     refs.sort(key=lambda r: r[0])
 
     stats = {"exact": 0, "fallback": 0, "missing": 0, "cooldown": 0, "limit": 0, "stolen": 0,
@@ -338,11 +359,17 @@ def mix(video: Path, cache_root: Path, out: Path | None = None, music: bool = Tr
         per_ref[key] = how
         if ev is None:
             continue
-        cooldown = ev.get("cooldown", 0.0)
-        if key in last_start and t - last_start[key] < max(cooldown, MIN_GAP):
+        cooldown = max(ev.get("cooldown", 0.0), MIN_GAP)
+        footstep = _is_footstep(key)
+        if footstep:
+            cooldown = max(cooldown, STEP_GAP)
+        elif key.endswith("_vo"):
+            cooldown = max(cooldown, VO_GAP)
+        if key in last_start and t - last_start[key] < cooldown:
             stats["cooldown"] += 1
             continue
         active = [v for v in voices.get(key, []) if v.end > t and (v.stop is None or v.stop > t)]
+        thin_db = max(STACK_MAX_DB, STACK_DB * len(active)) + (FOOTSTEP_DB if footstep else 0.0)
         if len(active) >= ev.get("max_instances", 1 << 31):
             if ev.get("steal", 64) == 0:  # stealing "none": the new instance does not start
                 stats["limit"] += 1
@@ -364,8 +391,8 @@ def mix(video: Path, cache_root: Path, out: Path | None = None, music: bool = Tr
                 continue
             pitch = c["pitch"] + (rng.uniform(-0.5, 0.5) * c["rand_pitch"] if c["rand_pitch"] else 0)
             s = _pitched(_load(p, decoded), pitch)
-            gain_db = ev["volume_db"] + c["volume_db"] + sfx_db - (rng.uniform(0, c["rand_volume_db"])
-                                                                   if c["rand_volume_db"] else 0)
+            gain_db = ev["volume_db"] + c["volume_db"] + sfx_db + thin_db - (
+                rng.uniform(0, c["rand_volume_db"]) if c["rand_volume_db"] else 0)
             delay = rng.uniform(*c["delay"]) if c["delay"][1] > c["delay"][0] else c["delay"][0]
             start = t + layer["start"] + delay
             if c.get("loop") and layer.get("length", 0) > len(s) / RATE:  # loops over its region
@@ -402,6 +429,8 @@ def mix(video: Path, cache_root: Path, out: Path | None = None, music: bool = Tr
         music_cues.sort()
         if not music_cues or music_cues[0][0] > 0.5:
             music_cues.insert(0, (0.0, BATTLE_MUSIC))
+        if end_at is not None:  # the battle music stops at the match's end
+            music_cues = [c for c in music_cues if c[0] < end_at] + [(end_at, SILENCE)]
         _mix_music(buf, music_cues, index, audio, decoded, rng, music_db)
 
     if normalize:
@@ -422,6 +451,10 @@ def mix(video: Path, cache_root: Path, out: Path | None = None, music: bool = Tr
           f"cooldown, {stats['limit'] + stats['stolen']} over the instance limit "
           f"({stats['stolen']} stolen) -> {out}")
     return out
+
+
+def _is_footstep(key: str) -> bool:
+    return key.endswith(("_steps", "_step", "_wing"))
 
 
 def _csv_rows(path: Path) -> list[dict]:
@@ -446,14 +479,18 @@ def _globals_array(rows: list[dict], name: str, column: str) -> list[str]:
 
 
 def battle_schedule(cache_root: Path, clock: float | None, dur: float,
-                    overtime_at: float | None = None, location: str = "PvP_royal") -> list[tuple[float, str]]:
+                    overtime_at: float | None = None, location: str = "PvP_royal",
+                    index: dict | None = None) -> list[tuple[float, str]]:
     """The sounds the game itself times in a battle, as (video seconds, sound reference):
 
     - client_globals SOUNDS_PVP at SOUND_START_TIMES (seconds left: the 60 s / 30 s warnings and
       the final 10..1 countdown);
     - MUSICS_PVP at MUSIC_START_TIMES (BattleMusic from 180 s left, 60sec_loop, 30sec_loop),
       named in csv_client/music.csv;
-    - the location's start jingle (locations.csv "Sound") when the video starts the battle;
+    - the location's start jingle (locations.csv "Sound") when the video starts the battle. In the
+      game it plays over the intro banners, before the clock (and the BattleMusic at 180 s left)
+      starts; a recording starts at the clock, so the music waits for the jingle's length here
+      (INFERRED), a silent cue (SILENCE) holding the time until then;
     - at overtime, the location's ExtraTimeMusic and the extra-time jingle.
     `clock` is the seconds left at video time 0 (None: only the overtime part)."""
     client = cache_root / "client"
@@ -485,7 +522,16 @@ def battle_schedule(cache_root: Path, clock: float | None, dur: float,
             out.append((0.0, playing[-1][1]))
         out += [(t, ref) for t, ref in cues if 0 < t < dur]
         if clock >= 179.5 and loc.get("Sound"):
-            out.append((max(0.0, clock - 180), loc["Sound"]))
+            t0 = max(0.0, clock - 180)
+            out.append((t0, loc["Sound"]))
+            wait = _event_seconds(loc["Sound"], index or {})
+            if wait > 0:
+                late = [(t, ref) for t, ref in out if _is_music(event_key(ref)) and t <= t0 + wait]
+                for cue in late:
+                    out.remove(cue)
+                out.append((t0, f"soundbanks/{SILENCE}"))
+                if late:
+                    out.append((t0 + wait, late[-1][1]))
     if overtime_at is not None and overtime_at < dur:
         ref = music_ref(loc.get("ExtraTimeMusic") or "Sudden_death")
         if ref:
@@ -494,11 +540,33 @@ def battle_schedule(cache_root: Path, clock: float | None, dur: float,
     return out
 
 
+def _event_seconds(ref: str, index: dict) -> float:
+    """How long an event plays: its longest layer's start plus its longest choice's sample."""
+    ev = index.get("events", {}).get(event_key(ref))
+    if not ev:
+        return 0.0
+    bank = ev.get("bank") or _bank_of(event_key(ref))
+    names = index.get("banks", {}).get(bank, {})
+    out = 0.0
+    for layer in ev.get("layers", []):
+        for c in layer.get("choices", []):
+            if c.get("sample") in names:
+                out = max(out, layer.get("start", 0.0) + names[c["sample"]])
+    return out
+
+
 def _mix_music(buf, cues, index, audio, decoded, rng, music_db):
-    """Loops each music event from its cue to the next one (a short fade between them)."""
+    """Loops each music event from its cue to the next one (a short fade between them; SILENCE
+    stops the music, fading out over MUSIC_END_FADE)."""
     n = len(buf)
     fade = int(1.0 * RATE)
     for i, (t, key) in enumerate(cues):
+        if key == SILENCE:
+            continue
+        if i + 1 < len(cues) and cues[i + 1][1] == SILENCE:
+            fade = int(MUSIC_END_FADE * RATE)
+        else:
+            fade = int(1.0 * RATE)
         ev = index.get("events", {}).get(key)
         bank = _bank_of(key)
         if ev is None or not ev["layers"]:

@@ -107,3 +107,28 @@ def test_limiter_ceiling():
     assert np.abs(y).max() <= 0.9
     quiet = (x * 0.05).astype(np.float32)
     assert np.allclose(audio._limit(quiet), quiet, atol=1e-6)
+
+
+@needs_ffmpeg
+def test_music_stops_at_match_end(tmp_path):
+    root = tmp_path / "cache"
+    bank = "music_arena_general_battle"
+    (root / "audio" / bank).mkdir(parents=True)
+    t = np.arange(int(1.0 * audio.RATE)) / audio.RATE
+    _write_wav(root / "audio" / bank / "m.ogg", 0.1 * np.sin(2 * np.pi * 220 * t))
+    choice = {"sample": "m", "weight": 1.0, "volume_db": 0.0, "pitch": 0.0, "rand_volume_db": 0.0,
+              "rand_pitch": 0.0, "delay": [0.0, 0.0], "loop": False}
+    ev = {"volume_db": 0.0, "max_instances": 1, "steal": 64, "cooldown": 0.0, "path": "event:/m",
+          "layers": [{"start": 0.0, "length": 0.0, "probability": 1.0, "choices": [choice]}]}
+    (root / "audio" / "index.json").write_text(json.dumps(
+        {"format": audio.FORMAT, "banks": {bank: {"m": 1.0}}, "events": {audio.BATTLE_MUSIC: ev}}))
+    video = tmp_path / "v.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=64x64:d=4", "-r",
+                    "10", str(video)], check=True)
+    video.with_name(video.name + ".sounds.jsonl").write_text('{"t": 1.5, "end": true}\n')
+    out = audio.mix(video, root, tmp_path / "out.mp4", normalize=False)
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(out), "-f", "f32le", "-ac", "1", "-ar",
+                          str(audio.RATE), "-"], capture_output=True, check=True).stdout
+    x = np.abs(np.frombuffer(raw, np.float32))
+    assert x[int(0.5 * audio.RATE):int(1.4 * audio.RATE)].max() > 0.05
+    assert x[int(2.2 * audio.RATE):].max() < 0.005
