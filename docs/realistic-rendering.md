@@ -106,7 +106,7 @@ Display units (**du**) are the SC2 coordinate units. Clip matrices and shapes ar
 
 **Confidence.** DATA.
 
-**Hero rows (INFERRED).** A hero row (`TombstoneHero`, `KnightHero`, `TombstoneHeroSkeleton`, …) has an empty `FileName` and export names: the game draws it with the 3D model its `PrefabAsset` names (`sc3d/...`), which the art cache does not hold. Such a row, when it has a `PrefabAsset` and a `Base` (`BUILDING.Tombstone`, `CHARACTER.Skeleton`), is drawn with its `Base` row's SC2 art, followed recursively. A row without a `Base` stays undrawn: the Hero Tombstone's `TombstoneHero_visual_dummy`, `TombstoneHero_Monster_Passive` and its Skeleton Queen (`TombstoneHero_Monster_Active`) have no SC2 art at all. The hero deploy effects themselves (`vfx_tombstone_hero_deploy`, `vfx_megaminion_hero_deploy`) are SC2 and are drawn as the data gives them: tall pillars (about 250 du, 8 tiles) and a dark navy back column (`vmc_megaminion_hero_deploy_backglow`, colour multiplier 0,13,51) for about a second.
+**Hero rows (INFERRED).** A hero row (`TombstoneHero`, `KnightHero`, `TombstoneHeroSkeleton`, …) has an empty `FileName` and export names: the game draws it with the 3D model its `PrefabAsset` names (`sc3d/...`), which the 2D art cache does not hold (`crforge-art sc3d` now extracts these models as glTF, §10). Such a row, when it has a `PrefabAsset` and a `Base` (`BUILDING.Tombstone`, `CHARACTER.Skeleton`), is drawn with its `Base` row's SC2 art, followed recursively. A row without a `Base` stays undrawn: the Hero Tombstone's `TombstoneHero_visual_dummy`, `TombstoneHero_Monster_Passive` and its Skeleton Queen (`TombstoneHero_Monster_Active`) have no SC2 art at all. The hero deploy effects themselves (`vfx_tombstone_hero_deploy`, `vfx_megaminion_hero_deploy`) are SC2 and are drawn as the data gives them: tall pillars (about 250 du, 8 tiles) and a dark navy back column (`vmc_megaminion_hero_deploy_backglow`, colour multiplier 0,13,51) for about a second.
 
 ### 1.2 Which actions exist
 
@@ -915,6 +915,69 @@ Not used: `sound_get_crown_1..3` (the same sample pitched like `crown_appear`), 
 
 The game's 3D attenuation, buses' snapshots and ducking are not in the parsed data; these rules stand in for them.
 
+## 10. 3D assets (sc3d)
+
+The rows that the game draws only in 3D are listed in §1.1 (hero forms, `Ronin`, `MinionGiant`, evolutions with a `PrefabAsset`). `crforge-art sc3d` (see `tools/game-art/README.md`) extracts them as standard glTF 2.0 into `<cache>/<sha>/sc3d/`. Extraction is done. Placing the models in the battle is not done yet.
+
+**Where the data is (DATA).**
+
+- `assets/assets.scdb` is a SQLite database with tables `meta(path, assetType, assetFilename, uuid, …)` and `asset(path, data, …)`.
+- Prefabs (`ScrollRuntimeScene`), animation state machines (`AssetASMData`) and timelines are JSON in `asset.data`. References are written `"path | uuid"`.
+- `PrefabAsset = "sc3d/.../hero_prefab_x_battle"` names a prefab. Its node tree holds the following components (`objectType`):
+  - 5001 Model: `.glb`, plus `Geometries[].MaterialOverride` (`.rmat`);
+  - 5003 `AsmAsset`;
+  - 5007 light;
+  - 5019 `PivotPoints` (`hudoffset`);
+  - 5006 nested `Prefab`;
+  - 5018 `MaterialAsset`;
+  - 5004/5008 particles and movie clips;
+  - 5014/5016 timelines.
+- The battle prefabs name the `lod1` models. `lod0` appears only in the `_collection` (menu) prefabs.
+
+**File formats.**
+
+| File | Format | Label |
+|---|---|---|
+| `.glb` | glTF binary container; the JSON chunk is replaced by a `FLA2` chunk: the glTF 2.0 schema as a FlatBuffer (field order in `gltf_flat.fbs`). It decodes to sane JSON for all 1437 files, and every accessor fits its bufferView | DATA |
+| `SC_odin_format` | node parents, interleaved vertex streams, materials and packed animation in a glTF extension (`odin.py` docstring) | DATA (decodes and validates for all files) |
+| vertex formats 30/29/22/12/9/3/36 | float3 / float2 / unorm16×2 / snorm8×4 / unorm8×4 / u8×4 / packed weights (11+11+10 bits, /4095). Normals come out unit length, weights sum to 1 and joints stay below the joint count | INFERRED, checked by the validator on all 341 models |
+| UV v | stored v-up: glTF v = 1 − v | INFERRED, visually (textures land on the right parts only when flipped) |
+| packed clips | int16 stream per node: `n` keys, then `−r` = hold r frames. Rotation is xyzw·32767; translation and scale are base + value·multiplier. Every one of the 1088 clips consumes exactly its `dataSize` | stream layout DATA. "Hold" INFERRED: the step after a hold is as large as a normal frame step, so held frames are not interpolated gaps |
+| `.ktx` | KTX2, ASTC 4×4 / 6×6 / 8×8 (vkFormat 157–172), no supercompression, `KTXorientation = rd` | DATA |
+| `_n` | X in RGB, Y in alpha, Z rebuilt | INFERRED (R=G=B on every normal map). Whether +Y is "up" (OpenGL) or "down" is a GUESS: a lit render would settle it |
+| `_mra` | R metallic, G roughness, B ambient occlusion | INFERRED (gold parts have high R) |
+| `_spec` (`teamColorTex`) | R ≈ a specular/brightness mask, G/B small masks | GUESS. It is kept as a side PNG |
+| `.rmat` | FlatBuffer `{version, base, params[{name, type, value}]}` with types 1 float, 2–4 float vectors, 6 texture path, 7 bool. All 1900 files decode | DATA (type 2 is INFERRED) |
+
+**Space and units.**
+
+- **Prefab space is Z-up (DATA).** Each model's top node `CHARACTER` rotates its Y-up mesh by +90° about X, and `hudoffset` pivots lie on +z (0.84–3.3). The `.glb` adds a `zup_to_yup` root for viewers. Drop that root to work in prefab space.
+- **Facing (INFERRED).** In prefab space the characters face −Y: on every rigged character, the `L_*` bones sit at +x. In the glTF output they face +Z, glTF's front. Tombstone-like buildings are turned 180° about z by their prefab.
+- **Prefab node transforms (DATA).** Each node has `pos`, `rot` in Euler degrees, and `scl`. The character models are scaled 0.67–1.0 and are turned only about z. The Euler order matters only for VFX nodes and is a GUESS (x, then y, then z): `index.json` `models[].transform` uses it.
+- **1 unit ≈ 1 tile (INFERRED, weak).** Ronin's model, prefab-scaled, is 0.82 deep and 1.5 tall, against a `CollisionRadius` of 600 (1.2 tiles across). The Tombstone base is 1.3 × 1.7. Check it by drawing a model over its collision circle.
+
+**Camera, lights and states: clues found (DATA, use unverified).**
+
+- `client_globals.csv` `VANILLA_3D_ACTOR_ENV` names `sc3d/vanilla/maps/arn_default/prefab_arn_default`. It holds a `camera_root` rotated −36.8° about x, with the camera 20 units out on its z axis. The camera component is `IsOrtho: true`, `OrthoWidth 27.8`, `OrthoHeight 49.39` (9:16), `Near 0.1`, `Far 1000`, `Fov 45`, `BloomThreshold 1.13`.
+  - A 36.8° tilt from vertical squashes the ground's length by cos 36.8° = 0.801. §3.1 measured 0.811 (φ ≈ 35.8°) on the 2D arena art, so the 3D actors are probably drawn with an orthographic camera matching the 2D view.
+  - The camera sits on the +y side, so a unit's default −Y facing points up the screen, matching "dir 1 at the bottom" (§2).
+  - How 27.8 × 49.39 units map onto the 18 × 32 tile arena is open. If 1 unit = 1 tile, the arena would fill only 65% of the width.
+- `arn_default` light: rot (−60, −180, −41), intensity 2, white, ambient (132, 115, 106), `AmbientSpecIntensity 2.45`.
+  - Each battle prefab also carries its own `sun`: rot (−80.6, 0, −32.6), intensity 2–3, colour 128 grey, ambient around (111–136, 138–169, 114–139).
+  - Which light wins, and how the `uber_pbr` shader combines them with `ambientIntensity`, `metalness` and the rim-light params, is open. The shaders are in `assets/sc3d/shaders/*.shader` (not decoded).
+- `sc3d/vanilla/animation_states_remapping` maps the client's numeric anim states to ASM state names:
+  - 0 Walk, 1 Idle, 2 Attack, 3 Charge, 4 Dash, 5 Deploy, 6–8 Attack2–4, 12/17 Skill, 16 SkillLoop, 24/26/28 Custom1–3, 27 Warp, 29 Walk2.
+  - Each ASM (`sc3d/asm/*.json`) maps those names to clip, frame range, `BaseSpeed` and sound events, with `Random` states for idle breaks. This is the 3D counterpart of §1.3.
+- `hudoffset` (prefab z) is the health-bar height. `ClippingPlaneEnabled` (5017) is probably the ground clip for deploy-from-below (GUESS).
+
+**What placing them needs.**
+
+- Project prefab space with the ortho camera above: tilt 36.8°, and a scale in pixels per unit that still has to be fitted against the 2D arena's 29.75 du per tile.
+- Turn the model about z by the unit's heading. The default facing is −Y.
+- Play the ASM state that the logic state maps to through the remapping table.
+- Light it with the prefab's `sun` and ambient.
+- Check the unit size against the 2D sprites (§3.2) and the collision radius.
+
 ---
 
 ## What `EntityView` needs in addition
@@ -940,6 +1003,6 @@ The game's 3D attenuation, buses' snapshots and ducking are not in the parsed da
 9. **`RotateAngleSpeed` and `TurretMovement` units** are not established: deg/s versus a turret step.
 10. **King ↔ `chr_king.sc` link.** No table names it; it is assumed hard-coded in the client.
 11. **Particle emitters** are about 70% of effect components. Without an emitter, most hit, death and trail visuals are missing. The SWF-only parts (stuck arrows, spell rings, zap bolts) are the cheap wins.
-12. **Not done:** the Training Camp decoration pass was not composited; only its ground pads were measured. The ruin exports were not rendered. Hero, evo and `sc3d`-only art was not examined beyond confirming that SC2 fallbacks exist.
+12. **Not done:** the Training Camp decoration pass was not composited; only its ground pads were measured. The ruin exports were not rendered. Hero, evo and `sc3d`-only art is extracted (§10) but not yet drawn.
 13. **Lava Pups' glow.** Each `chr_lava_pups.sc` clip draws over the body a glow (shape 1, a 24 du soft disc scaled about 2.3×, covering the whole pup) with blend 8 (add) and the colour transform `mul (18, 18, 18)`, `alpha 187`, `add (255, 255, 151)`: a pale-yellow additive wash at 0.73 that turns the orange-brown body yellow-orange. The transform's byte order is DATA (identity is `255,255,255,a,0,0,0` 343 times in `effects.sc`, and `filter_cold` is a blue add), and the drawer applies it as Flash does (`rgb·mul + add·a`, then added). So the bright pups are drawn as the data says; whether the game's shader treats an additive child's added colour differently is unverified.
 14. **Dashes and jumps (§1.6).** Check against a capture: whether the Mega Knight is translucent in the air (its `DashFilter`'s alpha) or the filter belongs to the wind-up; where its crouch falls; the river jump's height (4000 game units lift a hog 70 du); and the dash clips' turn order on the Golden Knight.

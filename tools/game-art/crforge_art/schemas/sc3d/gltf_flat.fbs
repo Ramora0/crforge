@@ -1,0 +1,298 @@
+// The FlatBuffer that Supercell's sc3d .glb files carry instead of the glTF JSON chunk
+// (GLB chunk type "FLA2"). It is the glTF 2.0 JSON schema written as FlatBuffer tables:
+// same object and property names, one table per glTF object. Field ORDER is what matters
+// (it fixes the vtable slots); it was checked against Clash Royale's files, see
+// docs/realistic-rendering.md "3D assets". The order follows the public reverse-engineering
+// by Daniil-SV (github.com/Daniil-SV/Supercell-Flat-Converter); this file is written from
+// scratch for crforge and read at runtime by crforge_art/flatgltf.py (no generated code).
+//
+// Conventions:
+//  * "extensions" / "extras" are FlexBuffers holding the JSON object of the glTF property.
+//  * glTF ids default to -1 (= property absent).
+//  * enums marked "string" are glTF string enums stored as their index.
+//  * Accessor.componentType may carry a Supercell hint in its high 16 bits; the glTF value
+//    is the low 16 bits.
+
+enum ComponentType: uint { BYTE = 5120, UNSIGNED_BYTE = 5121, SHORT = 5122, UNSIGNED_SHORT = 5123,
+                           UNSIGNED_INT = 5125, FLOAT = 5126 }
+enum AccessorType: ubyte { SCALAR, VEC2, VEC3, VEC4, MAT2, MAT3, MAT4 }                    // string
+enum AnimationChannelTargetPath: ubyte { translation, rotation, scale, weights }           // string
+enum AnimationSamplerInterpolation: ubyte { LINEAR, STEP, CUBICSPLINE }                    // string
+enum BufferViewTarget: uint { ARRAY_BUFFER = 34962, ELEMENT_ARRAY_BUFFER = 34963 }
+enum CameraType: ushort { orthographic, perspective }                                      // string
+enum MaterialAlphaMode: ushort { OPAQUE, MASK, BLEND }                                     // string
+enum MeshPrimitiveMode: ubyte { POINTS, LINES, LINE_LOOP, LINE_STRIP, TRIANGLES, TRIANGLE_STRIP, TRIANGLE_FAN }
+enum SamplerFilter: ushort { NONE = 0, NEAREST = 9728, LINEAR = 9729, NEAREST_MIPMAP_NEAREST = 9984,
+                             LINEAR_MIPMAP_NEAREST = 9985, NEAREST_MIPMAP_LINEAR = 9986,
+                             LINEAR_MIPMAP_LINEAR = 9987 }
+enum WrapMode: ushort { REPEAT = 10497, CLAMP_TO_EDGE = 33071, MIRRORED_REPEAT = 33648 }
+
+table AccessorSparseIndices {
+  bufferView: int = -1;
+  byteOffset: uint = 0;
+  componentType: ComponentType = UNSIGNED_BYTE;
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+}
+
+table AccessorSparseValues {
+  bufferView: int = -1;
+  byteOffset: uint = 0;
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+}
+
+table AccessorSparse {
+  count: uint;
+  indices: AccessorSparseIndices;
+  values: AccessorSparseValues;
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+}
+
+table Accessor {
+  bufferView: int = -1;
+  byteOffset: uint = 0;
+  componentType: ComponentType = BYTE;
+  count: uint = 0;
+  sparse: AccessorSparse;
+  name: string;
+  max: [float];
+  min: [float];
+  extensions: [ubyte] (flexbuffer);
+  normalized: bool = false;
+  extras: [ubyte] (flexbuffer);
+  type: AccessorType = SCALAR;
+}
+
+table Asset {
+  copyright: string;
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+  generator: string;
+  minVersion: string;
+  version: string;
+}
+
+table AnimationChannelTarget {
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+  node: int = -1;
+  path: AnimationChannelTargetPath = translation;
+}
+
+table AnimationChannel {
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+  sampler: int = 0;
+  target: AnimationChannelTarget;
+}
+
+table AnimationSampler {
+  extras: [ubyte] (flexbuffer);
+  extensions: [ubyte] (flexbuffer);
+  input: int = 0;
+  interpolation: AnimationSamplerInterpolation = LINEAR;
+  output: int = 0;
+}
+
+table Animation {
+  channels: [AnimationChannel];
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+  name: string;
+  samplers: [AnimationSampler];
+}
+
+table Buffer {
+  byteLength: uint = 0;
+  uri: string;
+  name: string;
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+}
+
+table BufferView {
+  buffer: int = -1;
+  byteLength: uint = 0;
+  byteOffset: uint = 0;
+  byteStride: uint = 0;
+  name: string;
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+  target: BufferViewTarget = 0;
+}
+
+table CameraOrthographic {
+  xmag: float;
+  ymag: float;
+  zfar: float;
+  znear: float;
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+}
+
+table CameraPerspective {
+  aspectRatio: float;
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+  yfov: float;
+  zfar: float;
+  znear: float;
+}
+
+table Camera {
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+  type: CameraType = orthographic;
+  name: string;
+  perspective: CameraPerspective;
+  orthographic: CameraOrthographic;
+}
+
+table Image {
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+  bufferView: int = -1;
+  mimeType: string;
+  name: string;
+  uri: string;
+}
+
+table TextureInfo {
+  index: int = -1;
+  texCoord: int = 0;
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+}
+
+table MaterialNormalTextureInfo {
+  scale: float = 1.0;
+  index: int = -1;
+  texCoord: int = 0;
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+}
+
+table MaterialOcclusionTextureInfo {
+  strength: float = 1.0;
+  index: int = -1;
+  texCoord: int = 0;
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+}
+
+table MaterialPbrMetallicRoughness {
+  baseColorFactor: [float];
+  baseColorTexture: TextureInfo;
+  metallicFactor: float = 1.0;
+  roughnessFactor: float = 1.0;
+  metallicRoughnessTexture: TextureInfo;
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+}
+
+table Material {
+  pbrMetallicRoughness: MaterialPbrMetallicRoughness;
+  normalTexture: MaterialNormalTextureInfo;
+  occlusionTexture: MaterialOcclusionTextureInfo;
+  emissiveTexture: TextureInfo;
+  emissiveFactor: [float];
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+  doubleSided: bool = false;
+  name: string;
+  alphaCutoff: float = 0.5;
+  alphaMode: MaterialAlphaMode = OPAQUE;
+}
+
+table MeshPrimitive {
+  attributes: [ubyte] (flexbuffer);   // {"POSITION": accessor, ...}
+  extensions: [ubyte] (flexbuffer);
+  targets: [ubyte] (flexbuffer);
+  indices: int = -1;
+  material: int = -1;
+  mode: MeshPrimitiveMode = TRIANGLES;
+  extras: [ubyte] (flexbuffer);
+}
+
+table Mesh {
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+  name: string;
+  primitives: [MeshPrimitive];
+  weights: [float];
+}
+
+table Node {
+  camera: int = -1;
+  children: [int];
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+  weights: [float];
+  mesh: int = -1;
+  name: string;
+  rotation: [float];
+  scale: [float];
+  skin: int = -1;
+  translation: [float];
+  matrix: [float];
+}
+
+table Scene {
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+  name: string;
+  nodes: [int];
+}
+
+table Sampler {
+  wrapS: WrapMode = REPEAT;
+  wrapT: WrapMode = REPEAT;
+  magFilter: SamplerFilter = NONE;
+  minFilter: SamplerFilter = NONE;
+  name: string;
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+}
+
+table Texture {
+  name: string;
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+  sampler: int = -1;
+  source: int = -1;
+}
+
+table Skin {
+  extensions: [ubyte] (flexbuffer);
+  extras: [ubyte] (flexbuffer);
+  inverseBindMatrices: int = -1;
+  joints: [int];
+  name: string;
+  skeleton: int = -1;
+}
+
+table Root {
+  accessors: [Accessor];
+  animations: [Animation];
+  asset: Asset;
+  bufferViews: [BufferView];
+  buffers: [Buffer];
+  cameras: [Camera];
+  extensions: [ubyte] (flexbuffer);
+  extensionsRequired: [string];
+  extensionsUsed: [string];
+  extras: [ubyte] (flexbuffer);
+  images: [Image];
+  materials: [Material];
+  meshes: [Mesh];
+  nodes: [Node];
+  samplers: [Sampler];
+  scene: int = -1;
+  scenes: [Scene];
+  skins: [Skin];
+  textures: [Texture];
+}
+
+root_type Root;
