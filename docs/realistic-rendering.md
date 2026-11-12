@@ -1,4 +1,55 @@
-# Realistic rendering: what to draw and where
+# Realistic rendering
+
+crforge's desktop module can draw a battle with the game's own art, sounds and HUD in place of the debug visualizer's shapes. The art is never part of this repository: it is extracted from the user's own Clash Royale installation into a local cache, the way the game tables are built from the game's files (see [Game tables](game-tables.md)).
+
+<p align="center"><i>Arena, towers, troops, shadows, effects and HUD below are the game's own movie clips, played by the simulator.</i></p>
+
+## Using it
+
+1. **Build the art cache** from an installation (once per game version). The tool lives in `tools/game-art` (Python, [uv](https://docs.astral.sh/uv/)):
+
+   ```bash
+   cd tools/game-art
+   uv run crforge-art extract --adb                        # a phone with the game, over adb
+   uv run crforge-art extract --apk base.apk split_*.apk   # or the APKs (or an .xapk/.apkm bundle)
+   uv run crforge-art extract --assets path/to/assets      # or an already-extracted assets/ folder
+   # add --audio to also decode the battle sounds (needs libvorbis: brew install libvorbis)
+   ```
+
+   It writes `~/.crforge/art/<content sha>/` (about 1.3 GB): each SC2 file's scene graph as JSON and its atlases as PNG, the client tables, the arena location files and, with `--audio`, the sounds. Nothing is pre-rendered: the desktop plays the clips itself. `tools/game-art/README.md` has the details and the legal note: the art is Supercell's, for personal use under its Fan Content Policy, and must never be committed or redistributed.
+
+2. **In the visualizer**, press **X** (or start it with `--args="--realistic"`) to swap the debug shapes for the game's art. The debug overlays and inspector keep working on top.
+
+3. **Record a video** of a replay, offscreen, framed like a phone (1080x2340, 60 fps, HUD included):
+
+   ```bash
+   ./gradlew :desktop:run --args="--replay examples/replays/ladder.json --record battle.mp4"
+   #   [--size 1080x2340] [--fps 60] [--from SECONDS] [--seconds N] [--bottom 0|1] [--location PvP_royal]
+   #   a .png target writes one still at --from
+   cd tools/game-art && uv run crforge-art audio ../../battle.mp4   # adds the game's sounds and music
+   ```
+
+   Positions are interpolated between the battle's 50 ms ticks, so the video plays smoothly at 60 fps.
+
+## How it is drawn
+
+`desktop/src/main/java/org/crforge/desktop/render/art`:
+
+| Class | Role |
+|---|---|
+| `ArtCache`, `ScScene` | find the cache; read a scene JSON (shapes, movie clips, matrix banks) |
+| `ScDrawer` | play a movie clip at a frame: each child at its matrix and colour transform (multiply and add), each shape as textured triangle strips, the clip's blend modes |
+| `ArtProjection` | the arena art's anisotropic projection (§3) |
+| `ArenaScene` | the arena from its location file: background plus decorations (§4) |
+| `RealisticRenderer` | every troop, building, tower and projectile: animation, facing, shadows, deploy filter (§1, 2, 5, 6, 8) |
+| `EffectLayer`, `EffectDefs`, `EffectDrawer` | the effects table's effects with a particle simulator, tower ruins, and the sounds the effects start (§7) |
+| `BattleHud`, `HudArt`, `HudFonts` | health bars, tower bars, hands, elixir, timer and crowns from the game's UI art |
+| `CinematicRecorder` | `--record`: the offscreen video and its sound events |
+| `RealisticView` | the visualizer's X mode |
+
+The rest of this document is the evidence behind the rules those classes follow.
+
+# What to draw and where
 
 This spec covers the realistic-render mode, which draws each simulated entity with the game's own SC2 movie clips. For every entity it says which export to play, at which frame, where to put it, how big to draw it and in what order. Each rule carries a confidence label:
 
@@ -6,18 +57,16 @@ This spec covers the realistic-render mode, which draws each simulated entity wi
 - **INFERRED**: a pattern that holds across many units, or that a column name implies.
 - **GUESS**: no evidence yet. The rule says what would confirm it.
 
-Sources:
+Sources (paths in the game's assets, as the art cache keeps them):
 
 | Name | Path |
 |---|---|
-| sc | `crai/game_assets/pack/assets/sc/*.sc`, loaded with `tools/game-art` `crforge_art.sc2` |
-| tables | `~/.crforge/tables/16.635.8/*.json`, the rows the simulator runs |
-| toml | `crai/game_assets/decoded/csv_logic` |
-| vfx | `crai/game_assets/pack/assets/legacy_vfx/effects.json` and `emitters.json` |
+| sc | `assets/sc/*.sc`, read with `tools/game-art` `crforge_art.sc2` |
+| tables | the game tables the simulator runs (`~/.crforge/tables/<version>/*.json`) |
+| toml | `assets/csv_logic`, decoded into the art cache's `client/csv_logic` |
+| vfx | `assets/legacy_vfx/effects.json` and `emitters.json` (the cache's `client/legacy_vfx`) |
 
 Display units (**du**) are the SC2 coordinate units. Clip matrices and shapes are in du, and 1 du is one pixel at 1x.
-
-Survey scripts and renders are kept outside the repo: `/private/tmp/claude-501/-Users-leedavis-coding-python-ai-crai/85cbaac6-0269-44d3-a6e9-ccc1b5620142/scratchpad/specwork/`. The main ones are `survey_anims.py` (every character and building row, read through its `FileName`) and `img/*.png`.
 
 ---
 
@@ -129,7 +178,7 @@ Two further rules apply to every state:
 
 ### 1.4 Attack timing: line the `action_frame` up with the logic hit
 
-**What the clip shows (DATA, checked visually in `img/knight_attack5.png`).** `Knight_attack1_5` starts and ends in the ready pose, sword forward (frames 0–6 and 24–34). Frames 9–21 are the wind-up, with the sword raised behind. Frame 22, the `action_frame`, is the strike. So `action_frame` is the moment of impact (melee) or release (ranged), and the clip runs ready → wind-up → impact → ready.
+**What the clip shows.** `Knight_attack1_5` starts and ends in the ready pose, sword forward (frames 0–6 and 24–34). Frames 9–21 are the wind-up, with the sword raised behind. Frame 22, the `action_frame`, is the strike. So `action_frame` is the moment of impact (melee) or release (ranged), and the clip runs ready → wind-up → impact → ready.
 
 **Model in the core (DATA, `AttackTimerAdvance.java`).**
 
@@ -216,7 +265,7 @@ So during an attack it already points at the target (DATA, from the core code). 
 
 Use the game-space (unsquashed) vector, not one squashed by the 0.81 y factor of §3. The direction sprites are 3D renders of the model turned by `k·22.5°` on the ground plane, so the index is a ground angle (INFERRED). Using the squashed vector would shift some 45° headings by one index.
 
-**Variants (DATA counts; visual checks in `img/`):**
+**Variants (DATA counts; visual checks):**
 
 | Directions | Units | Notes |
 |---|---|---|
@@ -281,7 +330,7 @@ The rows with Scale 130–140 are the ones whose raw art is visibly undersized: 
 
 **Evidence.**
 
-- In every render under `img/`, the red cross marks clip (0,0), and it sits at the feet or the base centre for all directions.
+- In renders with clip (0,0) marked, it sits at the feet or the base centre for all directions.
 - The crai renderer documents the same thing ("origin is … the unit's ground anchor").
 - Pre-rendered sheets store it per frame as `ax, ay`.
 
@@ -327,7 +376,7 @@ Every ring is an ellipse with height/width 0.81–0.82: poison 85.9/105.2, freez
 **Rule.** Follow this chain:
 
 1. `arenas.csv`: the arena row's `PvpLocation` names a row of `locations.csv`.
-2. That row's `FileName` names `locations/<x>.csv` under `pack/assets/locations/`.
+2. That row's `FileName` names `locations/<x>.csv` under `assets/locations/`.
 3. The file is LZMA-compressed with Supercell's old header: insert 4 zero bytes after the 9-byte header, then decode it as LZMA "alone". `crforge_art.lzma_tables` and `crharness.gamedata` both do this.
 4. The decoded file holds:
    - `FileName`: one (sc, ExportName) pair, the **ground**.
@@ -537,7 +586,7 @@ The base is 108 du wide against a 3-tile footprint of 89 du, because the battlem
 
 ## 7. Effects, area effects, spells
 
-**The effects table** is `pack/assets/legacy_vfx/effects.json`. It holds 2443 effects, keyed by exactly the names the rows use (`knight_hit`, `Fireball_explosion`, …).
+**The effects table** is `assets/legacy_vfx/effects.json`. It holds 2443 effects, keyed by exactly the names the rows use (`knight_hit`, `Fireball_explosion`, …).
 
 Effect keys:
 
@@ -653,7 +702,7 @@ Ordering is INFERRED from what sits on each layer. Base versus Ground is a GUESS
 
 **ScaledEffect size.** Scale the art uniformly so that its ring's horizontal half-width (in du, from the first frame's bounds) equals `Radius/1000 · 29.75` du. Rows share one effect at different radii (`Spell_freeze_ground`: 3000 and 40000), so the scale must come from the radius. The rings are authored at about 30 du per tile (§3), so at the authored radius the scale is about 1. **INFERRED.**
 
-**sc3d.** `pack/assets/sc3d/characters/` holds 3D assets for about 50 units (knight, archer, giant, hogrider, musketeer, princess, pekka, …). Every character and projectile `FileName` still exists as SC2, so SC2 art exists for all of them. Only 9 Prefab effect components and 8 projectile `PrefabAsset`s are 3D-only. **DATA.**
+**sc3d.** `assets/sc3d/characters/` holds 3D assets for about 50 units (knight, archer, giant, hogrider, musketeer, princess, pekka, …). Every character and projectile `FileName` still exists as SC2, so SC2 art exists for all of them. Only 9 Prefab effect components and 8 projectile `PrefabAsset`s are 3D-only. **DATA.**
 
 ---
 
