@@ -26,7 +26,7 @@ Vertex formats (attribute ``format``):
   29  2 x float32            (UV, v up: glTF v = 1 - v)
   30  3 x float32            (position)
   36  uint32 packed weights: w1 = bits 21..31, w2 = bits 10..20, w3 = bits 0..9, each / 4095,
-      w0 = 1 - w1 - w2 - w3
+      w0 = 1 - w1 - w2 - w3 (so w1..w3 <= 0.5: a joint weighing more is listed twice; merged here)
 Attribute ``index``: 0 pos, 1 normal, 2 uv0, 3 uv1, 4 color, 5 boneindex, 6 boneweights, 7 tangent,
   15 color1 (8..14 never occur in Clash Royale).
 
@@ -431,9 +431,15 @@ def convert(g: dict, bin_data: bytes, material_cb=None, name: str = "") -> tuple
         if ("WEIGHTS_0" in decoded) != ("JOINTS_0" in decoded):
             decoded.pop("WEIGHTS_0", None)
             decoded.pop("JOINTS_0", None)
-        if "JOINTS_0" in decoded:  # unused influences point at joint 0 (glTF recommendation)
+        if "JOINTS_0" in decoded:
             joints, weights = decoded["JOINTS_0"][0], decoded["WEIGHTS_0"][0]
-            joints[weights <= 0] = 0
+            # the packing caps influences 1..3 at 0.5, so a heavy joint can be listed twice: merge
+            for k in range(1, 4):
+                for m in range(k):
+                    dup = (joints[:, k] == joints[:, m]) & (weights[:, k] > 0)
+                    weights[dup, m] += weights[dup, k]
+                    weights[dup, k] = 0
+            joints[weights <= 0] = 0  # unused influences point at joint 0 (glTF recommendation)
         attrs = {}
         for gname, (arr, gtype, opts) in decoded.items():
             attrs[gname] = b.accessor(arr, gtype, normalized=opts.get("normalized", False),
@@ -492,6 +498,9 @@ def convert(g: dict, bin_data: bytes, material_cb=None, name: str = "") -> tuple
     # A skinned mesh ignores its node's transform (the joints place it), so make those nodes scene
     # roots, as glTF recommends; the game parents them under "Geometry", which changes nothing.
     for i, n in enumerate(nodes):
+        if "skin" in n:
+            for k in ("translation", "rotation", "scale", "matrix"):  # ignored for skinned meshes
+                n.pop(k, None)
         if "skin" in n and i not in roots:
             for p in nodes:
                 if i in p.get("children", []):
