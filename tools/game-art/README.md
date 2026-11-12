@@ -91,16 +91,56 @@ uv run crforge-art audio battle.mp4 [--clock 180] [--overtime-at S] [--report]
 
 Known gaps: parameter sheets play their first instrument, nested events only their first layer, and snapshots, VCAs, effects and 3D panning are ignored. The stealing mode is inferred: flags 0 drop the new instance, any other value cuts the oldest.
 
+## 3D characters (sc3d)
+
+```sh
+uv run crforge-art sc3d --apk ~/cr/base.apk ~/cr/split_*.apk [--out DIR] [--scope battle|all] [--only NAME...] [--force]
+uv run python -m crforge_art.preview MODEL.glb out.png [--clip NAME --time S]   # headless check render
+```
+
+Some units exist only as 3D models: the hero forms (`TombstoneHero`, `KnightHero`, `MegaMinionHero`, ...), `Ronin`, `MinionGiant` and the evolutions with a `PrefabAsset` column. `sc3d` turns them into standard glTF 2.0 `.glb` files that any viewer loads (three.js, Blender, gdx-gltf, the Khronos validator). It reads the same sources as `extract` and writes only into `<content_sha>/sc3d/`; it does not touch `manifest.json`, `current.json` or the 2D files.
+
+- `--scope battle` (default) follows every `PrefabAsset = "sc3d/..."` in `csv_logic/**` (56 rows, 43 models, about 250 clips, 58 MB, 5 s). Nested prefabs are followed too. `--scope all` takes every prefab in `assets.scdb` (312 models, 1430 clips, about 460 MB, 25 s).
+- `--only NAME...` matches a table row name (`Ronin`, `TombstoneHero_visual_dummy`) or any part of a prefab path (`hero_tombstone`).
+- A model whose `.glb` already exists is skipped unless you pass `--force`.
+
+```
+<content_sha>/sc3d/
+  index.json                  rows -> prefabs -> models/ASMs/materials; documented in sc3d.INDEX_DOC
+  models/<path>.glb           one self-contained file per model (sc3d/ removed from the path)
+  textures/<path>.png         textures that glTF has no slot for (team-colour mask, reflection)
+  prefabs/<path>.json         prefab scene graphs as stored in assets.scdb
+  asm/<path>.json             animation state machines: state -> clip, frame range, speed, events
+  materials/<path>.json       decoded .rmat overrides that prefabs name (rim light, tint, ...)
+```
+
+What one `models/*.glb` holds:
+
+- the mesh as plain float/uint8 accessors (no extensions), the skin and the node hierarchy;
+- the textures, embedded as PNG:
+  - `*_diff` becomes `baseColorTexture`;
+  - `*_n` (two-channel: X in RGB, Y in alpha) is rebuilt into a standard RGB `normalTexture`;
+  - `*_mra` (R metallic, G roughness, B occlusion) is swizzled into glTF's ORM order and used as both `metallicRoughnessTexture` and `occlusionTexture`;
+- the game's material, unchanged, in `material.extras` (shader, blend mode, all floats, vectors and booleans). Textures with no glTF slot go to `extras.sideTextures`;
+- every animation clip that drives the model's skeleton, as one glTF animation per clip file, named after the file (`chr_ronin_attack01`, `hero_tombstone_deploy`). The clips are the ones its prefab's state machine uses, plus any other clip in the character's `animation/` folder that starts with the model's name and animates its bones. Clips are retargeted by bone name, because the clip files order their nodes differently. They are sampled once per frame (30 fps, LINEAR); a channel that never moves gets 2 keys.
+- an extra root node `zup_to_yup` (-90° about X). The game's prefab space is Z-up, while glTF is Y-up. Drop that node to work in prefab space.
+
+The prefabs name the `lod1` models. The game uses `lod0` (about 2.2× larger) only in its menu ("collection") prefabs, so `--scope battle` never needs it.
+
+Format notes are in the module docstrings: [`flatgltf.py`](crforge_art/flatgltf.py) (the `FLA2` chunk, schema [`schemas/sc3d/gltf_flat.fbs`](crforge_art/schemas/sc3d/gltf_flat.fbs)), [`odin.py`](crforge_art/odin.py) (Supercell's `SC_odin_format`: vertex streams, packed animation), [`ktx2.py`](crforge_art/ktx2.py), [`rmat.py`](crforge_art/rmat.py) and [`sc3d.py`](crforge_art/sc3d.py) (`assets.scdb`, prefabs, the index). Placing the models in the battle is not done yet: see "3D assets" in `docs/realistic-rendering.md`.
+
 ## Tests
 
 ```sh
 uv run pytest -q
 ```
 
-The tests use the real game APKs and are skipped when no APKs are found. Set `CRFORGE_ART_APK_DIR` to a folder holding `base.apk` and the `split_*.apk` files.
+Most tests use the real game APKs and are skipped when no APKs are found. The sc3d tests (`tests/test_sc3d.py`) run on hand-made fixtures (`tests/sc3d_fixtures.py`) and need no game files. Set `CRFORGE_ART_APK_DIR` to a folder holding `base.apk` and the `split_*.apk` files.
 
 ## Legal
 
 Clash Royale and all of its art, animation and data are the property of Supercell. This tool contains no game data. It only reads the files of an installation that you own and writes them into a private local cache, for your personal, non-commercial use under [Supercell's Fan Content Policy](https://supercell.com/en/fan-content-policy/). **Never commit, upload or redistribute the cache or any file extracted from it.** That includes screenshots or recordings made for anything other than fan content allowed by that policy. This folder's `.gitignore` excludes images and game files as a safeguard. Keep the cache outside the repository; the default is `~/.crforge/art`.
 
 The SC2/SCTX file format knowledge comes from the MIT-licensed [sc-workshop](https://github.com/sc-workshop) schemas. See `crforge_art/schemas/LICENSE-sc-workshop.txt`.
+
+The `FLA2` field order follows the public reverse engineering in Daniil-SV's [Supercell-Flat-Converter](https://github.com/Daniil-SV/Supercell-Flat-Converter). That repository has no license, so none of its code or files are included. `gltf_flat.fbs` and the decoders were written for crforge and checked against the game's files (see `docs/realistic-rendering.md`).
