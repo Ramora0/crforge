@@ -62,7 +62,8 @@ import org.crforge.desktop.render.ViewOrientation;
  * (the arena's length squashed by {@link #GROUND_SQUASH}), heights in du straight up the screen,
  * times in ms, as {@code emitters.json} gives them. The emitter semantics are inferred (see
  * docs/realistic-rendering.md §7): {@code ParticleCount} is the most particles alive at once,
- * {@code Inertia} a drag of Inertia/100 per second, negative {@code ParticleGravity} pulls down.
+ * {@code Inertia} a drag of Inertia/100 * {@link #INERTIA_SCALE} per second on every axis, negative
+ * {@code ParticleGravity} pulls down.
  */
 public final class EffectLayer {
 
@@ -84,14 +85,36 @@ public final class EffectLayer {
   /** Alpha of a Shadow-layer particle, drawn as a black silhouette. */
   private static final float SHADOW_ALPHA = 0.3f;
 
+  /**
+   * Vertical velocities and gravity in du (GUESS): at face value a death's elixir drops (vz 600,
+   * gravity -1700) peaked over two tiles up, the game's at about half a troop's height.
+   */
+  private static final float Z_SCALE = 0.5f;
+
+  /** Additive particles of one emitter drawn at full strength before they share it. */
+  private static final int GLOW_CROWD = 2;
+
+  /** Drag per second per 100 {@code Inertia} (GUESS, tuned against real-game clips). */
+  private static final float INERTIA_SCALE = 6f;
+
   /** Longest simulation step, seconds. */
   private static final double MAX_STEP = 1 / 120.0;
 
   /** Cap on live effects, oldest one-shots dropped beyond it. */
   private static final int MAX_INSTANCES = 400;
 
+  /** Cap on footstep effects playing at once (a Skeleton Army runs 15 pairs of feet). */
+  private static final int MAX_FOOTSTEPS = 24;
+
+  /** Shortest gap between two plays of the same footstep sound, seconds. */
+  private static final double STEP_SOUND_GAP = 0.12;
+
+  /** Screen shake: frequency (Hz); amplitude (du) and length (s) per ShakeScreen (GUESS). */
+  private static final double SHAKE_HZ = 16;
+
   private final ArtCache cache;
   private final EffectDefs defs;
+  private final VisualLookup lookup;
   private final List<Instance> instances = new ArrayList<>();
   private final List<Ruin> ruins = new ArrayList<>();
   private final Random rng = new Random(0x5EED);
@@ -115,6 +138,7 @@ public final class EffectLayer {
   public EffectLayer(ArtCache cache) {
     this.cache = cache;
     this.defs = new EffectDefs(cache);
+    this.lookup = new VisualLookup(cache);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -129,6 +153,9 @@ public final class EffectLayer {
     final double start;
     final int follow;
     final float scale;
+
+    /** A footstep, counted against {@link #MAX_FOOTSTEPS}. */
+    boolean footstep;
 
     /** Lift of the effect's origin above the ground, world pixels before ppdu (du). */
     final float liftGame;
@@ -201,6 +228,8 @@ public final class EffectLayer {
     float age, life; // seconds
     float s0, s1; // scale at birth and death, effect scale included
     float rot, rotSpeed; // degrees, clockwise on screen
+    float heading; // last direction of travel on screen, degrees, for RotateToDirection
+    float floor; // the ground's height relative to the effect's origin, du (<= 0 when lifted)
     boolean collide;
     boolean resting;
   }
@@ -214,9 +243,14 @@ public final class EffectLayer {
     if (this.tables != tables) {
       this.tables = tables;
       rowCache.clear();
+      cycles.clear();
+      windups.clear();
+      lookup.setTables(tables);
     }
     curClock = frame.tick() * TICK;
     curTimeMs = frame.timeMs();
+    prevTimers = curTimers;
+    curTimers = timers;
     if (previous == null) {
       prevClock = curClock;
       prevTimeMs = curTimeMs;
@@ -224,6 +258,21 @@ public final class EffectLayer {
       if (frame.tick() > 0 && ruins.isEmpty()) ruinsOfMissingTowers(frame, view);
       // what the observer heard before the first frame (a fast-forward) is not replayed
       events.clear();
+      struck.clear();
+      targetFilters.clear();
+      activations.clear();
+      for (EntityView e : frame.entities()) {
+        if (e.kind() == EntityView.Kind.TOWER
+            && e.maxHitPoints() > 0
+            && e.hitPoints() <= 0
+            && destroyedTowers.add(e.id())) {
+          EffectDefs.Sprite ruin =
+              defs.sprite(
+                  "sc/building_tower.sc",
+                  e.king() ? "Tower_destroyed_ground2" : "Tower_destroyed_ground1");
+          if (ruin != null) ruins.add(new Ruin(ruin, e.x(), e.y()));
+        }
+      }
       return;
     }
     prevClock = previous.tick() * TICK;
@@ -265,12 +314,371 @@ public final class EffectLayer {
     }
     for (EntityView e : frame.entities()) {
       if (e.kind() == EntityView.Kind.AREA_EFFECT) seenAreas.add(e.id());
+      // a crown tower at 0 hit points is destroyed even while the frame still lists it (the
+      // battle's last frame after a three-crown win)
+      if (e.kind() == EntityView.Kind.TOWER
+          && e.maxHitPoints() > 0
+          && e.hitPoints() <= 0
+          && destroyedTowers.add(e.id())) {
+        towerDestroyed(e, !view.blue(e.side()), now);
+      }
     }
     for (Event ev : events) heard(ev, after, view, now);
+    attackStarts(frame, before, view, now);
+    footsteps(frame, before, view, now);
+    flashes(after, view, now);
+    kingActivations(after, view, now);
     if (TEST != null) testEffects(frame.tick(), view, now);
     events.clear();
+    spawnedBy.keySet().retainAll(after.keySet());
     if (seenAreas.size() > 4096) seenAreas.clear();
     while (instances.size() > MAX_INSTANCES) instances.remove(0);
+    shakes.removeIf(s -> now - s[0] > shakeLength(s[1]) + 0.1);
+    damageFlash.values().removeIf(f -> now - f.start() > 3);
+    targetFlash.values().removeIf(f -> now - f.start() > 3);
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // attack starts (AttackStartEffect)
+
+  /** Attack timers by entity id as the observer last read them: {timerMs, sequenceIndex}. */
+  private Map<Integer, int[]> timers = Map.of();
+
+  private Map<Integer, int[]> curTimers = Map.of();
+  private Map<Integer, int[]> prevTimers = Map.of();
+
+  /** Per character name and attack sequence index: {hitSpeedMs, windUpStartMs}. */
+  private final Map<String, int[]> windups = new HashMap<>();
+
+  /**
+   * Plays each attacking character's {@code AttackStartEffect} when its attack clip starts: the
+   * renderer lines the clip's {@code action_frame} up with the hit (§1.4), so the clip starts
+   * {@code action_frame / fps} before each multiple of the hit speed on the attack timer, i.e. when
+   * the timer crosses {@code HitSpeed - af} (mod HitSpeed). A unit that locks on already inside the
+   * wind-up starts it at once. Without the observer's timers, it plays as the unit starts
+   * attacking. Mostly a sound (406 of 418 rows); a beam (Tesla) only plays its sound here.
+   */
+  private void attackStarts(
+      BattleFrame frame, Map<Integer, EntityView> before, ViewOrientation view, double now) {
+    for (EntityView e : frame.entities()) {
+      if (e.state() != org.crforge.core.pathfinding.GridEntityState.ATTACKING) continue;
+      if (e.kind() != EntityView.Kind.TROOP && e.kind() != EntityView.Kind.BUILDING) continue;
+      GameRow row = character(e.name());
+      String name = text(row, "AttackStartEffect");
+      if (name == null) continue;
+      EntityView p = before.get(e.id());
+      boolean wasAttacking =
+          p != null && p.state() == org.crforge.core.pathfinding.GridEntityState.ATTACKING;
+      int[] t1 = curTimers.get(e.id());
+      double at = Double.NaN;
+      if (t1 == null) {
+        if (!wasAttacking) at = now;
+      } else {
+        boolean blue = view.blue(e.side());
+        int[] w = windup(e.name(), blue, t1[1]);
+        int hs = w[0], start = w[1];
+        int[] t0 = wasAttacking ? prevTimers.get(e.id()) : null;
+        if (t0 == null || t1[0] < t0[0]) {
+          if (Math.floorMod(t1[0], hs) >= start) at = now;
+        } else if (t1[0] > t0[0]) {
+          long n0 = Math.floorDiv((long) t0[0] - start, hs);
+          long n1 = Math.floorDiv((long) t1[0] - start, hs);
+          if (n1 > n0) {
+            long cross = (n0 + 1) * hs + start;
+            at = now + TICK * (cross - t0[0]) / (double) (t1[0] - t0[0]);
+          }
+        }
+      }
+      if (Double.isNaN(at)) continue;
+      boolean red = !view.blue(e.side());
+      if (name.equals(text(row, "TargetedHitEffect"))) {
+        // a beam drawn between the unit and its target: only its sound here
+        EffectDefs.Effect fx = defs.effect(name, red);
+        if (fx != null) queueSounds(fx, at);
+        continue;
+      }
+      int tx = e.hasTarget() ? e.targetX() : e.x() + e.headingX();
+      int ty = e.hasTarget() ? e.targetY() : e.y() + e.headingY();
+      playFacing(name, red, at, e.x(), e.y(), lift(row, e), view, e.x(), e.y(), tx, ty);
+    }
+  }
+
+  /** {hit speed, timer phase (ms) at which the attack clip starts} of a character's attack. */
+  private int[] windup(String name, boolean blue, int sequence) {
+    return windups.computeIfAbsent(
+        name + (blue ? "|b|" : "|r|") + sequence,
+        k -> {
+          VisualLookup.Unit unit = lookup.unit(name, blue);
+          GameRow row = character(name);
+          int hs = RealisticRenderer.integer(row, "VisualHitSpeed", 0);
+          if (hs <= 0) hs = RealisticRenderer.integer(row, "HitSpeed", 1000);
+          hs = Math.max(50, hs);
+          if (unit == null) return new int[] {hs, 0};
+          String action = "attack";
+          if (sequence > 0 && unit.has("attack" + (sequence + 1))) {
+            action = "attack" + (sequence + 1);
+          }
+          int id = unit.animation(action, 5);
+          ScScene.Clip clip = id < 0 ? null : unit.scene.clip(id);
+          // no attack clip (most buildings): the hit itself
+          if (clip == null || clip.frameCount() <= 1) return new int[] {hs, 0};
+          int af = clip.labelFrame("action_frame");
+          float afMs = (af >= 0 ? af : clip.frameCount() * 0.6f) * 1000f / Math.max(1, clip.fps());
+          return new int[] {hs, Math.max(0, hs - Math.round(afMs))};
+        });
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // footsteps (MoveEffect)
+
+  /** When each running unit's run clip started (battle seconds). */
+  private final Map<Integer, Double> runStart = new HashMap<>();
+
+  /** Per character name and colour: {cycle, footfall 1, footfall 2} in seconds, or empty. */
+  private final Map<String, double[]> cycles = new HashMap<>();
+
+  private final Map<String, Double> lastStepSound = new HashMap<>();
+
+  private static boolean running(int state) {
+    return state == org.crforge.core.pathfinding.GridEntityState.MOVING
+        || state == org.crforge.core.pathfinding.GridEntityState.SPAWN_PATHFIND
+        || state == org.crforge.core.pathfinding.GridEntityState.INGAME_PATHFIND
+        || state == org.crforge.core.pathfinding.GridEntityState.ROUTE_FOLLOWING_ALTERNATE;
+  }
+
+  /**
+   * Plays each running ground troop's {@code MoveEffect} on its run clip's footfalls: the {@code
+   * action_frame1} and {@code action_frame2} labels of {@code run1} (§1.5), the clip looped at its
+   * fps from the tick the unit started running, as the renderer plays it. Flyers and units that did
+   * not move this tick make none; at most {@link #MAX_FOOTSTEPS} play at once and each step sound
+   * plays at most every {@link #STEP_SOUND_GAP} seconds.
+   */
+  private void footsteps(
+      BattleFrame frame, Map<Integer, EntityView> before, ViewOrientation view, double now) {
+    int live = 0;
+    for (Instance in : instances) if (in.footstep && !in.done()) live++;
+    java.util.Set<Integer> moving = new java.util.HashSet<>();
+    for (EntityView e : frame.entities()) {
+      if (e.kind() != EntityView.Kind.TROOP || e.air() || !running(e.state())) continue;
+      moving.add(e.id());
+      EntityView p = before.get(e.id());
+      Double rs = runStart.get(e.id());
+      if (rs == null || p == null || !running(p.state())) {
+        rs = now;
+        runStart.put(e.id(), rs);
+      }
+      if (p == null || (p.x() == e.x() && p.y() == e.y()) || e.hidden()) continue;
+      GameRow row = character(e.name());
+      String name = text(row, "MoveEffect");
+      if (name == null) continue;
+      boolean red = !view.blue(e.side());
+      double[] c = cycle(e.name(), !red);
+      if (c.length == 0) continue;
+      for (int k = 1; k < 3; k++) {
+        // footfalls rs + c[k] + n * cycle in [now, now + TICK)
+        double first = rs + c[k] + Math.ceil((now - rs - c[k]) / c[0] - 1e-9) * c[0];
+        for (double t = first; t < now + TICK - 1e-9; t += c[0]) {
+          float a = (float) ((t - now) / TICK);
+          int x = Math.round(p.x() + (e.x() - p.x()) * a);
+          int y = Math.round(p.y() + (e.y() - p.y()) * a);
+          EffectDefs.Effect fx = defs.effect(name, red);
+          if (fx == null) break;
+          for (EffectDefs.Sound s : fx.sounds()) {
+            Double last = lastStepSound.get(s.ref());
+            if (last != null && Math.abs(t - last) < STEP_SOUND_GAP) continue;
+            lastStepSound.put(s.ref(), t);
+            sounds.add(new PendingSound(t + s.delay(), s.ref()));
+          }
+          if (!fx.drawable() || live >= MAX_FOOTSTEPS) continue;
+          Instance in = new Instance(fx, t, x, y, -1, 1f, 0, red);
+          in.footstep = true;
+          in.angle = screenAngle(view, p.x(), p.y(), e.x(), e.y());
+          add(in);
+          live++;
+        }
+      }
+    }
+    runStart.keySet().retainAll(moving);
+  }
+
+  /** {cycle, footfall 1, footfall 2} seconds of a character's run clip; empty without one. */
+  private double[] cycle(String name, boolean blue) {
+    return cycles.computeIfAbsent(
+        name + (blue ? "|b" : "|r"),
+        k -> {
+          VisualLookup.Unit unit = lookup.unit(name, blue);
+          if (unit == null) return new double[0];
+          int id = unit.animation("run", 5);
+          ScScene.Clip clip = id < 0 ? null : unit.scene.clip(id);
+          if (clip == null || clip.frameCount() <= 1 || clip.fps() <= 0) return new double[0];
+          double fps = clip.fps();
+          int n = clip.frameCount();
+          int f1 = clip.labelFrame("action_frame1");
+          int f2 = clip.labelFrame("action_frame2");
+          if (f1 < 0) f1 = 0;
+          if (f2 < 0) f2 = (f1 + n / 2) % n;
+          return new double[] {n / fps, f1 / fps, f2 / fps};
+        });
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // damage flash and unit filters (§8)
+
+  /** A filter clip playing on a unit since {@code start} (battle seconds). */
+  private record Flash(String file, String export, double start) {}
+
+  private final Map<Integer, Flash> damageFlash = new HashMap<>();
+  private final Map<Integer, Flash> targetFlash = new HashMap<>();
+
+  /** Hits heard: {victim id, attacker x, attacker y, 1 if the attacker is known}. */
+  private final List<int[]> struck = new ArrayList<>();
+
+  /** Area effects' victims: victim id and the area's row name. */
+  private record AreaVictim(int victim, String area, int side) {}
+
+  private final List<AreaVictim> targetFilters = new ArrayList<>();
+
+  private void flashes(Map<Integer, EntityView> after, ViewOrientation view, double now) {
+    for (int[] s : struck) {
+      EntityView v = after.get(s[0]);
+      if (v == null) continue;
+      Flash old = damageFlash.get(s[0]);
+      // a hit with no known attacker does not override a directed one this tick
+      if (s[3] == 0 && old != null && old.start() == now) continue;
+      String base = text(character(v.name()), "DamageExportName");
+      if (base == null) continue;
+      String dir = "down";
+      if (s[3] != 0) {
+        float dx = view.x((float) v.x()) - view.x((float) s[1]);
+        float dy = -(view.y((float) v.y()) - view.y((float) s[2])) * GROUND_SQUASH;
+        if (dx * dx + dy * dy > 1e-3f) {
+          if (Math.abs(dx) > Math.abs(dy)) dir = dx > 0 ? "right" : "left";
+          else dir = dy > 0 ? "down" : "up";
+        }
+      }
+      damageFlash.put(s[0], new Flash("sc/effects.sc", base + "_" + dir, now));
+      if (DEBUG) System.err.printf("flash %.2f %s %d %s_%s%n", now, v.name(), s[0], base, dir);
+    }
+    struck.clear();
+    for (AreaVictim av : targetFilters) {
+      for (EffectDefs.Filter f : areaFilters(av.area(), !view.blue(av.side()))) {
+        targetFlash.put(av.victim(), new Flash(f.file(), f.export(), now + f.delay()));
+        if (DEBUG) System.err.printf("flash %.2f %d %s%n", now, av.victim(), f.export());
+      }
+    }
+    targetFilters.clear();
+  }
+
+  /** The unit filters of an area effect's effects (Zap's {@code filter_target}). */
+  private List<EffectDefs.Filter> areaFilters(String area, boolean red) {
+    GameRow row = row("area_effect_objects", area);
+    List<EffectDefs.Filter> out = new ArrayList<>();
+    for (String name :
+        new String[] {
+          text(row, "OneShotEffect"), text(row, "HitEffect"), spellEffect(area),
+        }) {
+      EffectDefs.Effect fx = defs.effect(name, red);
+      if (fx != null) out.addAll(fx.filters());
+    }
+    return out;
+  }
+
+  /**
+   * The filter to apply to unit {@code entityId}'s sprite at frame time {@code seconds} (the same
+   * seconds {@link #drawBelow} takes), or null for none: its row's {@code DamageExportName} ({@code
+   * filter_damage[_wobble]}) with the suffix of the last hit's direction on screen, from attacker
+   * to unit, and an area's {@code Filter} component on its victims (Zap's {@code filter_target}
+   * white flash) on top: {@code {a, b, c, d, tx, ty, alpha, addR, addG, addB, mulR, mulG, mulB}}.
+   * The matrix maps the unit's own display units (origin at its feet, y down, before mirroring), as
+   * the deploy filter's does; alpha and the multipliers multiply the sprite's colour, the added
+   * colour (0..1, straight) is added to it (ScDrawer's {@code u_add}).
+   */
+  public float[] damageFilter(int entityId, float seconds) {
+    if (damageFlash.isEmpty() && targetFlash.isEmpty()) return null;
+    double t = clockAt(seconds);
+    float[] d = sample(damageFlash.get(entityId), t);
+    float[] w = sample(targetFlash.get(entityId), t);
+    if (d == null) return w;
+    if (w == null) return d;
+    for (int i = 7; i < 10; i++) d[i] = Math.min(1f, d[i] + w[i]);
+    return d;
+  }
+
+  private float[] sample(Flash f, double t) {
+    if (f == null || t < f.start()) return null;
+    return defs.filterAt(f.file(), f.export(), (float) (t - f.start()));
+  }
+
+  /** The battle clock (tick seconds) at a frame time in seconds. */
+  private double clockAt(float seconds) {
+    return prevClock + (curClock - prevClock) * alphaOf(seconds);
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // screen shake
+
+  /** Shakes started: {battle seconds, ShakeScreen strength}. */
+  private final List<double[]> shakes = new ArrayList<>();
+
+  /** GUESS: the shake's peak in display units, growing with the root of its strength. */
+  private static double shakeAmplitude(double strength) {
+    return 1.2 * Math.sqrt(strength / 100.0);
+  }
+
+  /** GUESS: how long a shake lasts, seconds (Fireball 800: 0.52 s, a king tower 2000: 1 s). */
+  private static double shakeLength(double strength) {
+    return 0.2 + strength / 2500.0;
+  }
+
+  /**
+   * The camera offset of the screen shake at frame time {@code seconds} (as {@link #drawBelow}
+   * takes it): {@code {dx, dy}} in display units (multiply by {@code
+   * ArtProjection.pixelsPerDisplayUnit()}), x right and y up the screen; {0, 0} at rest. Effects
+   * with {@code ShakeScreen} (Fireball 800, Rocket 1500, tower deaths 1000-2000, Zap 100) start a
+   * decaying shake; the strongest one playing wins. The amplitude and length are GUESSes.
+   */
+  public float[] shake(float seconds) {
+    if (shakes.isEmpty()) return new float[] {0, 0};
+    double t = clockAt(seconds);
+    double best = 0, bestAge = 0, bestSeed = 0;
+    for (double[] s : shakes) {
+      double age = t - s[0];
+      double len = shakeLength(s[1]);
+      if (age < 0 || age >= len) continue;
+      double k = 1 - age / len;
+      double amp = shakeAmplitude(s[1]) * k * k;
+      if (amp > best) {
+        best = amp;
+        bestAge = age;
+        bestSeed = s[0];
+      }
+    }
+    if (best < 0.02) return new float[] {0, 0};
+    double w = 2 * Math.PI * SHAKE_HZ * bestAge + bestSeed * 7.31;
+    return new float[] {
+      (float) (best * Math.sin(w)), (float) (best * 0.8 * Math.sin(w * 1.37 + 1.9))
+    };
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // king tower activation
+
+  /** Kings whose activation was heard: {id, x, y, side}. */
+  private final List<int[]> activations = new ArrayList<>();
+
+  private final Set<Integer> activatedKings = new java.util.HashSet<>();
+
+  /**
+   * A king tower waking plays {@code King_player_activate} (red: its {@code EnemyVersion} {@code
+   * King_enemy_activate}): the effect the king tower's {@code KingTowerActivationEffect} action
+   * plays ({@code csv_logic/characters/king_tower.toml}), sounds only.
+   */
+  private void kingActivations(Map<Integer, EntityView> after, ViewOrientation view, double now) {
+    for (int[] k : activations) {
+      if (!activatedKings.add(k[0])) continue;
+      play("King_player_activate", !view.blue(k[3]), now, k[1], k[2], -1, 1f, 0);
+    }
+    activations.clear();
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -280,6 +688,10 @@ public final class EffectLayer {
   private record Event(boolean area, String name, int id, int side, int x, int y, int victim) {}
 
   private final List<Event> events = new ArrayList<>();
+
+  /** Units the observer heard spawned by another object, by id: the spawner's row name. */
+  private final Map<Integer, String> spawnedBy = new HashMap<>();
+
   private final Set<Integer> seenAreas = new java.util.HashSet<>();
   private boolean observed;
 
@@ -304,6 +716,55 @@ public final class EffectLayer {
       }
 
       @Override
+      public void afterPostHooks(
+          int tick, List<WorldEntity> present, List<ProjectileEntity> projectiles) {
+        Map<Integer, int[]> t = new HashMap<>();
+        for (WorldEntity w : present) {
+          var targeting = w.getTargeting();
+          if (targeting == null) continue;
+          t.put(
+              w.getId(),
+              new int[] {targeting.getAttackTimerMs(), targeting.getAttackSequenceIndex()});
+        }
+        timers = t;
+      }
+
+      @Override
+      public void characterSpawned(
+          int tick,
+          org.crforge.core.battle.spawn.SpawnHost source,
+          org.crforge.core.battle.unit.CharacterEntity child,
+          int createdX,
+          int createdY) {
+        if (child == null || spawnedBy.size() > 4096) return;
+        spawnedBy.put(child.getId(), source == null ? "" : String.valueOf(source.name()));
+      }
+
+      @Override
+      public void projectileImpacted(
+          int tick,
+          ProjectileEntity projectile,
+          WorldEntity target,
+          int damage,
+          DamageResult result) {
+        if (target == null || projectile == null || struck.size() > 2000) return;
+        struck.add(new int[] {target.getId(), projectile.getStartX(), projectile.getStartY(), 1});
+      }
+
+      @Override
+      public void activation(
+          int tick,
+          org.crforge.core.battle.unit.TowerEntity king,
+          org.crforge.core.battle.unit.ActivationEvent event) {
+        if (king == null || event == null) return;
+        var kind = event.kind();
+        if (kind == org.crforge.core.battle.unit.ActivationEvent.Kind.ACTIVATING_STARTED
+            || kind == org.crforge.core.battle.unit.ActivationEvent.Kind.EFFECT) {
+          activations.add(new int[] {king.getId(), king.x(), king.y(), king.side()});
+        }
+      }
+
+      @Override
       public void areaHit(
           int tick,
           WorldEntity attacker,
@@ -318,6 +779,13 @@ public final class EffectLayer {
       public void areaEffectDamaged(
           int tick, AreaEffectEntity areaEffect, AreaDamage.Area area, AreaDamage.Outcome outcome) {
         areaEffect(areaEffect);
+        if (areaEffect == null || areaEffect.getData() == null || outcome == null) return;
+        if (outcome.damaged() == null || struck.size() > 2000) return;
+        String name = areaEffect.getData().name();
+        for (var v : outcome.damaged()) {
+          struck.add(new int[] {v.id(), areaEffect.getX(), areaEffect.getY(), 1});
+          targetFilters.add(new AreaVictim(v.id(), name, areaEffect.side()));
+        }
       }
 
       @Override
@@ -335,6 +803,13 @@ public final class EffectLayer {
   }
 
   private void hit(BattleEntity source, WorldEntity target) {
+    if (target != null && struck.size() <= 2000) {
+      if (source instanceof WorldEntity a) {
+        struck.add(new int[] {target.getId(), a.x(), a.y(), 1});
+      } else {
+        struck.add(new int[] {target.getId(), 0, 0, 0});
+      }
+    }
     if (source == null || target == null || source instanceof ProjectileEntity) return;
     if (!(source instanceof WorldEntity attacker)) return;
     if (events.size() > 2000) return;
@@ -376,7 +851,8 @@ public final class EffectLayer {
       if (!seenAreas.add(ev.id())) return;
       GameRow row = row("area_effect_objects", ev.name());
       play(text(row, "OneShotEffect"), red, now, ev.x(), ev.y(), -1, 1f, 0);
-      play(spellEffect(ev.name()), red, now, ev.x(), ev.y(), -1, 1f, 0);
+      // its sounds play with the card (BattleSounds)
+      play(spellEffect(ev.name()), red, now, ev.x(), ev.y(), -1, 1f, 0, false);
       return;
     }
     EntityView victim = after.get(ev.victim());
@@ -403,7 +879,18 @@ public final class EffectLayer {
     switch (e.kind()) {
       case TROOP, BUILDING -> {
         GameRow row = character(e.name());
-        play(text(row, "SpawnEffect"), red, now, e.x(), e.y(), -1, 1f, lift(row, e));
+        String source = spawnedBy.remove(e.id());
+        if (source == null) {
+          play(text(row, "SpawnEffect"), red, now, e.x(), e.y(), -1, 1f, lift(row, e));
+        } else {
+          // a unit spawned by another (a Tombstone's, a Witch's skeletons) plays its spawner's
+          // SpawnCharacterEffect, not its own card deploy (SpawnEffect)
+          GameRow from = character(source);
+          String fx = text(from, "SpawnCharacterEffect");
+          if (fx == null && from == null)
+            fx = text(row("area_effect_objects", source), "SpawnEffect");
+          play(fx, red, now, e.x(), e.y(), -1, 1f, lift(row, e));
+        }
       }
       case PROJECTILE -> {
         GameRow row = row("projectiles", e.name());
@@ -422,7 +909,8 @@ public final class EffectLayer {
           float s = hw > 1 && want > 0 ? want / hw : 1f;
           add(new Instance(scaled, now, e.x(), e.y(), e.id(), s, 0, red));
         }
-        play(spellEffect(e.name()), red, now, e.x(), e.y(), -1, 1f, 0);
+        // its sounds play with the card (BattleSounds)
+        play(spellEffect(e.name()), red, now, e.x(), e.y(), -1, 1f, 0, false);
       }
       default -> {}
     }
@@ -435,15 +923,7 @@ public final class EffectLayer {
         play(text(row, "DeathEffect"), red, now, p.x(), p.y(), -1, 1f, lift(row, p));
       }
       case TOWER -> {
-        GameRow row = character(p.name());
-        String death = text(row, "DeathEffect");
-        if (death == null) death = p.king() ? "King_player_die" : "TowerExplode";
-        play(death, red, now, p.x(), p.y(), -1, 1f, 0);
-        EffectDefs.Sprite ruin =
-            defs.sprite(
-                "sc/building_tower.sc",
-                p.king() ? "Tower_destroyed_ground2" : "Tower_destroyed_ground1");
-        if (ruin != null) ruins.add(new Ruin(ruin, p.x(), p.y()));
+        if (destroyedTowers.add(p.id())) towerDestroyed(p, red, now);
       }
       case PROJECTILE -> {
         GameRow row = row("projectiles", p.name());
@@ -460,6 +940,22 @@ public final class EffectLayer {
       }
       default -> {}
     }
+  }
+
+  /** Towers already exploded (vanished, or listed at 0 hit points). */
+  private final Set<Integer> destroyedTowers = new java.util.HashSet<>();
+
+  /** A crown tower falls: its death effect, and its ruin for the rest of the battle. */
+  private void towerDestroyed(EntityView p, boolean red, double now) {
+    GameRow row = character(p.name());
+    String death = text(row, "DeathEffect");
+    if (death == null) death = p.king() ? "King_player_die" : "TowerExplode";
+    play(death, red, now, p.x(), p.y(), -1, 1f, 0);
+    EffectDefs.Sprite ruin =
+        defs.sprite(
+            "sc/building_tower.sc",
+            p.king() ? "Tower_destroyed_ground2" : "Tower_destroyed_ground1");
+    if (ruin != null) ruins.add(new Ruin(ruin, p.x(), p.y()));
   }
 
   /**
@@ -541,6 +1037,7 @@ public final class EffectLayer {
   /** A hit landed on {@code e}: the closest enemy attacking it plays its DamageEffect on it. */
   private void damaged(
       EntityView e, BattleFrame frame, boolean targetRed, double now, ViewOrientation view) {
+    struck.add(new int[] {e.id(), 0, 0, 0});
     EntityView best = null;
     long bestD = Long.MAX_VALUE;
     for (EntityView a : frame.entities()) {
@@ -562,6 +1059,7 @@ public final class EffectLayer {
       }
     }
     if (best == null) return;
+    struck.add(new int[] {e.id(), best.x(), best.y(), 1});
     GameRow row = character(best.name());
     playFacing(
         text(row, "DamageEffect"),
@@ -595,6 +1093,19 @@ public final class EffectLayer {
       int follow,
       float scale,
       float liftGame) {
+    return play(name, red, now, gx, gy, follow, scale, liftGame, true);
+  }
+
+  private Instance play(
+      String name,
+      boolean red,
+      double now,
+      int gx,
+      int gy,
+      int follow,
+      float scale,
+      float liftGame,
+      boolean withSounds) {
     EffectDefs.Effect fx = defs.effect(name, red);
     if (DEBUG && name != null) {
       System.err.printf(
@@ -606,7 +1117,11 @@ public final class EffectLayer {
           gy);
     }
     if (fx == null) return null;
-    queueSounds(fx, now);
+    if (withSounds) queueSounds(fx, now);
+    if (fx.shake() > 0 && shakes.size() < 64) {
+      shakes.add(new double[] {now, fx.shake()});
+      if (DEBUG) System.err.printf("shake %.2f %s %d%n", now, name, fx.shake());
+    }
     if (!fx.drawable()) return null;
     // a one-shot does not follow; a looping one follows its owner and ends with it
     int f = follow;
@@ -829,7 +1344,7 @@ public final class EffectLayer {
     float speed = rand(em.minSpeed, em.maxSpeed) * s;
     p.vx = cx * speed;
     p.vy = cy * speed;
-    p.vz = rand(em.minVz, em.maxVz) * s;
+    p.vz = rand(em.minVz, em.maxVz) * s * Z_SCALE;
     p.life = Math.max(0.016f, rand(em.pMinLife, em.pMaxLife) / 1000f);
     float var = em.randomScale > 0 ? 1f + (rng.nextFloat() * 2f - 1f) * em.randomScale / 100f : 1f;
     var = Math.max(0.1f, var);
@@ -837,6 +1352,8 @@ public final class EffectLayer {
     p.s1 = em.endScale / 100f * s * var;
     p.rotSpeed = rand(em.rotMinSpeed, em.rotMaxSpeed);
     // particles born on or above the ground land on it; shadow-layer ones mirror below it
+    // (a flyer's death plays at its height: its drops fall to the ground, not to that height)
+    p.floor = -in.liftGame * ArtProjection.DU_PER_HEIGHT_UNIT;
     p.collide = r.part.layer() != EffectDefs.Layer.SHADOW && p.z >= 0 && em.gravity < 0;
     r.particles.add(p);
     if (preAge > 0) stepParticle(p, em, Math.min(preAge, (float) MAX_STEP));
@@ -846,17 +1363,20 @@ public final class EffectLayer {
     p.age += dt;
     if (p.resting) return;
     if (em.inertia > 0) {
-      float k = (float) Math.exp(-em.inertia / 100f * dt);
+      // a drag on every axis: undamped, a death's elixir drops (vz 600) rose 4 tiles and its
+      // puff (gravity +35) kept climbing for its whole 2.8 s life
+      float k = (float) Math.exp(-em.inertia / 100f * INERTIA_SCALE * dt);
       p.vx *= k;
       p.vy *= k;
+      p.vz *= k;
     }
-    p.vz += em.gravity * dt;
+    p.vz += em.gravity * Z_SCALE * dt;
     p.x += p.vx * dt;
     p.y += p.vy * dt;
     p.z += p.vz * dt;
     p.rot += p.rotSpeed * dt;
-    if (p.collide && p.z < 0) {
-      p.z = 0;
+    if (p.collide && p.z < p.floor) {
+      p.z = p.floor;
       if (em.stopOnBounce || em.noBounce || Math.abs(p.vz) < 40) {
         p.vz = 0;
         if (em.stopOnBounce || Math.abs(p.vx) + Math.abs(p.vy) < 2) p.resting = true;
@@ -938,7 +1458,8 @@ public final class EffectLayer {
     float ppdu = proj.pixelsPerDisplayUnit();
     boolean shadow = layer == EffectDefs.Layer.SHADOW;
     for (Instance in : instances) {
-      float lift = proj.height(in.liftGame);
+      // a shadow lies on the ground under a lifted effect
+      float lift = shadow ? 0f : proj.height(in.liftGame);
       for (Run r : in.runs) {
         if (r.done || !r.started || r.part.layer() != layer) continue;
         if (r.part.swf() != null) {
@@ -956,7 +1477,13 @@ public final class EffectLayer {
           continue;
         }
         EffectDefs.Emitter em = r.part.emitter();
-        for (Particle p : r.particles) drawParticle(drawer, proj, view, em, p, ppdu, lift, shadow);
+        // GUESS: additive glows of one emitter overlapping do not add up to a blinding blob in the
+        // game (a death's 12 purple glows); their alpha shares sqrt(GLOW_CROWD / alive)
+        int n = r.particles.size();
+        float crowd = n > GLOW_CROWD ? (float) Math.sqrt(GLOW_CROWD / (double) n) : 1f;
+        for (Particle p : r.particles) {
+          drawParticle(drawer, proj, view, em, p, ppdu, lift, shadow, crowd);
+        }
       }
     }
   }
@@ -969,10 +1496,12 @@ public final class EffectLayer {
       Particle p,
       float ppdu,
       float lift,
-      boolean shadow) {
+      boolean shadow,
+      float crowd) {
     float a = 1f;
     if (em.fadeIn > 0) a = Math.min(a, p.age * 1000f / em.fadeIn);
     if (em.fadeOut > 0) a = Math.min(a, (p.life - p.age) * 1000f / em.fadeOut);
+    if (p.sprite.additive()) a *= crowd;
     if (a <= 0.01f) return;
     float k = Math.min(1f, p.age / p.life);
     float s = (p.s0 + (p.s1 - p.s0) * k) * ppdu;
@@ -986,8 +1515,11 @@ public final class EffectLayer {
     float wy = proj.y(view, p.ay) - p.y * ppdu + p.z * ppdu + lift;
     float rot = p.rot;
     if (em.rotateToDirection) {
-      float dx = p.vx, dy = p.vy - p.vz;
-      if (dx * dx + dy * dy > 1f) rot += (float) Math.toDegrees(Math.atan2(dy, dx));
+      // a falling (ballistic) particle points along its arc on screen; a floating one (a death's
+      // puff, gravity >= 0) along the ground, so its glows lie flat rather than stand up
+      float dx = p.vx, dy = em.gravity < 0 ? p.vy - p.vz : p.vy;
+      if (dx * dx + dy * dy > 1f) p.heading = (float) Math.toDegrees(Math.atan2(dy, dx));
+      rot += p.heading;
     }
     transform.setToTranslation(wx, wy);
     if (rot != 0) transform.rotate(-rot);

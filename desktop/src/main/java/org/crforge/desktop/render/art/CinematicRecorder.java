@@ -122,6 +122,7 @@ public final class CinematicRecorder extends ApplicationAdapter {
     hud = new BattleHud(cache, renderer.drawer());
     hud.setTables(tables);
     effects = new EffectLayer(cache);
+    renderer.setEffects(effects);
     // every hit and every short-lived area effect (a Zap lives 1 ms), as the battle reports them
     session.getBattle().getWorld().addObserver(effects.observer());
     session.getBattle().getWorld().addObserver(renderer.observer());
@@ -258,10 +259,17 @@ public final class CinematicRecorder extends ApplicationAdapter {
     Gdx.gl.glClearColor(0.11f, 0.13f, 0.12f, 1f);
     Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
     Gdx.gl.glEnable(GL20.GL_BLEND);
+    float seconds = (previous.timeMs() + (current.timeMs() - previous.timeMs()) * alpha) / 1000f;
+    // the effects' screen shake moves the arena, not the HUD
+    float[] shake = effects.shake(seconds);
+    float ppdu = proj.pixelsPerDisplayUnit();
+    float dx = shake == null ? 0 : shake[0] * ppdu;
+    float dy = shake == null ? 0 : shake[1] * ppdu;
+    camera.position.set(settings.width() / 2f - dx, settings.height() / 2f - dy, 0);
     camera.update();
     renderer.drawer().batch().setProjectionMatrix(camera.combined);
+    renderer.setEffectClock(seconds);
     arena.drawGround(renderer.drawer(), proj, view, current, previous, alpha);
-    float seconds = (previous.timeMs() + (current.timeMs() - previous.timeMs()) * alpha) / 1000f;
     renderer.drawer().begin();
     effects.drawBelow(renderer.drawer(), proj, view, seconds);
     renderer.drawer().end();
@@ -270,6 +278,8 @@ public final class CinematicRecorder extends ApplicationAdapter {
     effects.drawAbove(renderer.drawer(), proj, view, seconds);
     renderer.drawer().end();
     arena.drawOverlay(renderer.drawer(), proj, view, current, alpha);
+    camera.position.set(settings.width() / 2f, settings.height() / 2f, 0);
+    camera.update();
     hud.draw(
         current, previous, alpha, view, proj, settings.width(), settings.height(), camera.combined);
     pixels.clear();

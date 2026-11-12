@@ -54,8 +54,11 @@ final class EffectDefs {
     }
   }
 
-  /** One SC2 export: a clip (or shape) with its frame count and rate. */
-  record Sprite(ScScene scene, int id, int fps, int frames, boolean playOnce) {}
+  /**
+   * One SC2 export: a clip (or shape) with its frame count and rate; {@code additive} when it draws
+   * with an additive (or screen) blend, a glow that brightens what is under it.
+   */
+  record Sprite(ScScene scene, int id, int fps, int frames, boolean playOnce, boolean additive) {}
 
   /** A particle emitter of {@code emitters.json}, numbers as the file gives them (ms, du, %). */
   static final class Emitter {
@@ -93,12 +96,27 @@ final class EffectDefs {
    */
   record Part(Layer layer, float delay, float scale, boolean loop, Sprite swf, Emitter emitter) {}
 
-  /** An effect's drawable parts; empty for an effect that only plays sounds. */
   /** A sound a component names ({@code soundbanks/...}), {@code delay} seconds into the effect. */
   record Sound(float delay, String ref) {}
 
-  /** An effect's drawable parts and sounds; either may be empty. */
-  record Effect(String name, List<Part> parts, boolean loop, List<Sound> sounds) {
+  /**
+   * A {@code Filter} component: a clip whose one placeholder child's per-frame matrix and colour
+   * transform apply to the sprite of the unit the effect lands on (§8), e.g. Zap's {@code
+   * filter_target} white flash.
+   */
+  record Filter(float delay, String file, String export) {}
+
+  /**
+   * An effect's drawable parts, sounds and unit filters (any may be empty), and its {@code
+   * ShakeScreen} strength (the largest of its nested effects', 0 for none).
+   */
+  record Effect(
+      String name,
+      List<Part> parts,
+      boolean loop,
+      List<Sound> sounds,
+      List<Filter> filters,
+      int shake) {
     boolean drawable() {
       return !parts.isEmpty();
     }
@@ -143,14 +161,24 @@ final class EffectDefs {
               List<Part> parts = new ArrayList<>();
               boolean[] loop = {false};
               List<Sound> sounds = new ArrayList<>();
-              expand(name, red, 0f, 1f, false, 0, parts, sounds, loop);
+              List<Filter> filters = new ArrayList<>();
+              int[] shake = {0};
+              expand(name, red, 0f, 1f, false, 0, parts, sounds, filters, shake, loop);
+              // the same sound at the same moment plays once
+              List<Sound> unique = new ArrayList<>();
+              for (Sound so : sounds) if (!unique.contains(so)) unique.add(so);
+              sounds = unique;
               Effect e =
                   new Effect(
                       name,
                       Collections.unmodifiableList(parts),
                       loop[0],
-                      Collections.unmodifiableList(sounds));
-              return e.drawable() || !sounds.isEmpty() ? Optional.of(e) : Optional.empty();
+                      Collections.unmodifiableList(sounds),
+                      Collections.unmodifiableList(filters),
+                      shake[0]);
+              return e.drawable() || !sounds.isEmpty() || !filters.isEmpty() || shake[0] > 0
+                  ? Optional.of(e)
+                  : Optional.empty();
             })
         .orElse(null);
   }
@@ -164,16 +192,22 @@ final class EffectDefs {
       int depth,
       List<Part> out,
       List<Sound> sounds,
+      List<Filter> filters,
+      int[] shake,
       boolean[] anyLoop) {
     if (depth > MAX_DEPTH || name == null) return;
     JsonNode def = effects.path(name);
     if (def.isMissingNode()) return;
-    if (red) {
+    // only the played effect swaps to its EnemyVersion: nested ones name unrelated effects there
+    // (Deploy_ground_fx_largeSize's is giant_skeleton_deploy_enemy, which nests it again: a red
+    // Electro Giant's deploy played the Giant Skeleton's and the Giant's deploy sounds six times)
+    if (red && depth == 0) {
       String enemy = def.path("EnemyVersion").asText("");
       if (!enemy.isEmpty() && !enemy.equals(name) && effects.has(enemy)) {
         def = effects.path(enemy);
       }
     }
+    shake[0] = Math.max(shake[0], def.path("ShakeScreen").asInt(0));
     float s = scale * def.path("Scale").asInt(100) / 100f;
     boolean l = loop || def.path("Loop").asBoolean(false);
     if (l) anyLoop[0] = true;
@@ -193,8 +227,24 @@ final class EffectDefs {
           Emitter em = emitter(c.path("ParticleEmitterName").asText(null));
           if (em != null) out.add(new Part(layer, d, cs, l, null, em));
         }
+        case "Filter" -> {
+          String file = c.path("FileName").asText("");
+          String export = c.path("ExportName").asText("");
+          if (!file.isBlank() && !export.isBlank()) filters.add(new Filter(d, file, export));
+        }
         case "Effect" ->
-            expand(c.path("Effect").asText(null), red, d, cs, l, depth + 1, out, sounds, anyLoop);
+            expand(
+                c.path("Effect").asText(null),
+                red,
+                d,
+                cs,
+                l,
+                depth + 1,
+                out,
+                sounds,
+                filters,
+                shake,
+                anyLoop);
         default -> {}
       }
     }
@@ -209,7 +259,53 @@ final class EffectDefs {
     ScScene.Clip clip = scene.clip(id);
     int fps = clip == null ? 30 : clip.fps();
     boolean once = clip != null && clip.labelFrame("playOnce") >= 0;
-    return new Sprite(scene, id, fps, scene.frameCount(id), once);
+    return new Sprite(scene, id, fps, scene.frameCount(id), once, additive(scene, id, 0));
+  }
+
+  private static boolean additive(ScScene scene, int id, int depth) {
+    ScScene.Clip clip = scene.clip(id);
+    if (clip == null || depth > 6) return false;
+    for (int b : clip.blend()) {
+      if (b == ScDrawer.BLEND_ADD || b == ScDrawer.BLEND_SCREEN) return true;
+    }
+    for (int child : clip.children()) if (additive(scene, child, depth + 1)) return true;
+    return false;
+  }
+
+  /**
+   * A filter clip's transform {@code seconds} into it (§8), or null once it has played or when the
+   * cache lacks it: {@code {a, b, c, d, tx, ty, alpha, addR, addG, addB, mulR, mulG, mulB}}, the
+   * matrix in the unit's own display units (origin at its feet, y down), the multipliers and the
+   * added colour in 0..1 (straight colour).
+   */
+  float[] filterAt(String file, String export, float seconds) {
+    if (seconds < 0) return null;
+    Sprite sp = sprite(file, export);
+    if (sp == null) return null;
+    ScScene.Clip c = sp.scene().clip(sp.id());
+    if (c == null || c.frameCount() == 0) return null;
+    int f = (int) Math.floor(seconds * c.fps());
+    if (f >= c.frameCount()) return null;
+    int[] el = c.frames()[f];
+    float[] out = {1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1};
+    if (el.length < 3) return out;
+    ScScene.Bank bank = sp.scene().bank(c.bank());
+    if (bank == null) return out;
+    if (el[1] != ScScene.IDENTITY && el[1] * 6 + 5 < bank.matrices().length) {
+      System.arraycopy(bank.matrices(), el[1] * 6, out, 0, 6);
+    }
+    if (el[2] != ScScene.IDENTITY && el[2] * 7 + 6 < bank.colors().length) {
+      int[] cc = bank.colors();
+      int o = el[2] * 7;
+      out[10] = cc[o] / 255f;
+      out[11] = cc[o + 1] / 255f;
+      out[12] = cc[o + 2] / 255f;
+      out[6] = cc[o + 3] / 255f;
+      out[7] = cc[o + 4] / 255f;
+      out[8] = cc[o + 5] / 255f;
+      out[9] = cc[o + 6] / 255f;
+    }
+    return out;
   }
 
   private Emitter emitter(String name) {

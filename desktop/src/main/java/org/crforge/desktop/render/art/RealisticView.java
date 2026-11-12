@@ -43,6 +43,7 @@ public final class RealisticView implements Disposable {
     this.renderer = new RealisticRenderer(cache);
     this.effects = new EffectLayer(cache);
     this.hud = new BattleHud(cache, renderer.drawer());
+    renderer.setEffects(effects);
   }
 
   /** The realistic view, when this machine has an art cache. */
@@ -101,7 +102,8 @@ public final class RealisticView implements Disposable {
     ScDrawer drawer = renderer.drawer();
     drawer.batch().setProjectionMatrix(camera.combined);
     arena.drawGround(drawer, proj, view, current, previous, 1f);
-    float seconds = current.tick() * 0.05f;
+    float seconds = current.timeMs() / 1000f; // the effect layer's clock
+    renderer.setEffectClock(seconds);
     drawer.begin();
     effects.drawBelow(drawer, proj, view, seconds);
     drawer.end();

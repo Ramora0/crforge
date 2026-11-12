@@ -45,6 +45,14 @@ public final class ScDrawer {
   private float curAddR = Float.NaN, curAddG, curAddB;
   private com.badlogic.gdx.graphics.glutils.ShaderProgram colorShader;
   private boolean silhouetteOn;
+  private float baseAddR, baseAddG, baseAddB;
+
+  /** An additive colour (straight, 0..1) for the next {@link #draw} only (a damage flash). */
+  public void setNextAdd(float r, float g, float b) {
+    baseAddR = r;
+    baseAddG = g;
+    baseAddB = b;
+  }
 
   public ScDrawer(PolygonSpriteBatch batch, ArtCache cache) {
     this.batch = batch;
@@ -128,7 +136,10 @@ public final class ScDrawer {
   public void draw(ScScene scene, int id, int frame, Affine2 transform, Color tint) {
     stack[0].set(transform);
     overrides = null;
-    addR[0] = addG[0] = addB[0] = 0;
+    addR[0] = baseAddR;
+    addG[0] = baseAddG;
+    addB[0] = baseAddB;
+    baseAddR = baseAddG = baseAddB = 0;
     drawObject(scene, id, frame, 0, tint.r, tint.g, tint.b, tint.a, BLEND_NORMAL);
     setBlend(BLEND_NORMAL);
   }
@@ -152,7 +163,10 @@ public final class ScDrawer {
       java.util.List<Override> childOverrides) {
     stack[0].set(transform);
     overrides = childOverrides;
-    addR[0] = addG[0] = addB[0] = 0;
+    addR[0] = baseAddR;
+    addG[0] = baseAddG;
+    addB[0] = baseAddB;
+    baseAddR = baseAddG = baseAddB = 0;
     drawObject(scene, id, frame, 0, tint.r, tint.g, tint.b, tint.a, BLEND_NORMAL);
     overrides = null;
     setBlend(BLEND_NORMAL);

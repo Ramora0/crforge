@@ -75,6 +75,19 @@ public final class RealisticRenderer implements Disposable {
     };
   }
   private final Color shadowColor = new Color(0f, 0f, 100 / 255f, 0.5f);
+  private EffectLayer effects;
+
+  /** The effect layer whose damage flashes ({@code filter_damage}) the units show. */
+  public void setEffects(EffectLayer effects) {
+    this.effects = effects;
+  }
+
+  private float effectClock;
+
+  /** The effect layer's clock this frame (seconds), for the damage flashes. */
+  public void setEffectClock(float seconds) {
+    this.effectClock = seconds;
+  }
 
   /**
    * The arena's shadow colour: the location row's {@code ShadowR/G/B} (0..255, absent = 0) and
@@ -210,6 +223,8 @@ public final class RealisticRenderer implements Disposable {
     boolean blue = view.blue(e.side());
     VisualLookup.Unit unit = lookup.unit(e.name(), blue);
     if (unit == null) return;
+    // a crown tower at 0 hit points is already its ruin (the effect layer draws it)
+    if (e.kind() == EntityView.Kind.TOWER && e.maxHitPoints() > 0 && e.hitPoints() <= 0) return;
     float alpha = e.hidden() ? 0.35f : 1f;
     float scale = proj.pixelsPerDisplayUnit() * unit.scale;
     float lift = e.air() ? proj.height(unit.flyingHeight) : 0f;
@@ -388,6 +403,7 @@ public final class RealisticRenderer implements Disposable {
     if (state != GridEntityState.DEPLOYING && state != GridEntityState.CLONE_SETUP) {
       st.deployStart = -1;
     }
+    filter = withDamageFlash(filter, e.id(), effectClock);
     if (!unit.has(action)) action = unit.has("idle") ? "idle" : action;
     if (e.shield() > 0 && unit.has("shield:" + action)) action = "shield:" + action;
     int n = unit.directions(action);
@@ -454,6 +470,26 @@ public final class RealisticRenderer implements Disposable {
     if (toHit * rate <= af) return af - toHit * rate;
     if (p * rate < length - af) return af + p * rate;
     return -1f;
+  }
+
+  /**
+   * The unit's filter with its damage flash (the effect layer's {@code filter_damage} frame:
+   * matrix, alpha, additive colour, multiplier) composed on top, or the filter alone.
+   */
+  private float[] withDamageFlash(float[] filter, int id, float seconds) {
+    float[] d = effects == null ? null : effects.damageFilter(id, seconds);
+    if (d == null) return filter;
+    float[] base = filter == null ? new float[] {1, 0, 0, 1, 0, 0, 1} : filter;
+    // (base o flash): the flash acts in the unit's local space after the deploy filter
+    float a = base[0] * d[0] + base[2] * d[1];
+    float b = base[1] * d[0] + base[3] * d[1];
+    float c = base[0] * d[2] + base[2] * d[3];
+    float dd = base[1] * d[2] + base[3] * d[3];
+    float tx = base[0] * d[4] + base[2] * d[5] + base[4];
+    float ty = base[1] * d[4] + base[3] * d[5] + base[5];
+    float[] out = {a, b, c, dd, tx, ty, base[6] * d[6], 0, 0, 0, 1, 1, 1};
+    if (d.length >= 13) System.arraycopy(d, 7, out, 7, 6);
+    return out;
   }
 
   /** The deploy filter's matrix and alpha at that time, or null once it has played (§8). */
@@ -572,6 +608,10 @@ public final class RealisticRenderer implements Disposable {
     }
     float a = q.alpha() * (f != null ? f[6] : 1f);
     tint.set(1, 1, 1, a);
+    if (f != null && f.length >= 13) {
+      tint.set(f[10], f[11], f[12], a);
+      drawer.setNextAdd(f[7], f[8], f[9]);
+    }
     if (q.overrides() != null) {
       drawer.draw(q.scene(), q.id(), q.frame(), transform, tint, q.overrides());
     } else {
@@ -607,7 +647,7 @@ public final class RealisticRenderer implements Disposable {
     transform.scale(sxs, -sys);
     if (q.flip()) transform.scale(-1, 1);
     // a unit still dropping in (the deploy filter's fade) casts a shadow as faint as itself
-    float fade = q.filter() != null && q.filter().length == 7 ? q.filter()[6] : 1f;
+    float fade = q.filter() != null && q.filter().length >= 7 ? q.filter()[6] : 1f;
     tint.set(shadowColor.r, shadowColor.g, shadowColor.b, shadowColor.a * q.alpha() * fade * fade);
     if (q.overrides() != null) {
       drawer.draw(q.scene(), q.id(), q.frame(), transform, tint, q.overrides());
