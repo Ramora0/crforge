@@ -37,7 +37,7 @@ public final class ArenaScene {
   /** The location drawn when the battle's own cannot be resolved. */
   public static final String FALLBACK_LOCATION = "PvP_royal";
 
-  private record Placed(ScScene scene, int export, float x, float y) {}
+  private record Placed(ScScene scene, int export, float x, float y, boolean above) {}
 
   private final List<Placed> ground = new ArrayList<>();
   private final Affine2 transform = new Affine2();
@@ -100,7 +100,7 @@ public final class ArenaScene {
         if (r.length >= 3 && r[1].endsWith(".sc")) {
           ScScene scene = cache.scene(r[1]);
           int id = scene == null ? -1 : scene.export(r[2]);
-          if (id >= 0) ground.add(new Placed(scene, id, 9000, 0));
+          if (id >= 0) ground.add(new Placed(scene, id, 9000, 0, false));
         }
       } else if (section.equals("Objects")) {
         if (r.length >= 2 && !r[1].isEmpty()) {
@@ -111,7 +111,8 @@ public final class ArenaScene {
           ScScene scene = cache.scene(deco[0]);
           int id = scene == null ? -1 : scene.export(deco[1]);
           int y = isInt(r[3]) ? Integer.parseInt(r[3]) : 0;
-          if (id >= 0) ground.add(new Placed(scene, id, Integer.parseInt(r[2]), y));
+          boolean above = deco.length > 2 && "Above".equalsIgnoreCase(deco[2]);
+          if (id >= 0) ground.add(new Placed(scene, id, Integer.parseInt(r[2]), y, above));
         }
       }
     }
@@ -150,13 +151,15 @@ public final class ArenaScene {
     int name = indexOf(header, "Name");
     int fileName = indexOf(header, "FileName");
     int export = indexOf(header, "ExportName");
+    int layer = indexOf(header, "Layer");
     String lastFile = null;
     for (int i = 2; i < rows.size(); i++) {
       String[] r = rows.get(i);
       if (name < 0 || r.length <= Math.max(fileName, export)) continue;
       String f = r[fileName].isEmpty() ? lastFile : r[fileName];
       lastFile = f;
-      if (!r[name].isEmpty()) out.put(r[name], new String[] {f, r[export]});
+      String l = layer >= 0 && layer < r.length ? r[layer] : "";
+      if (!r[name].isEmpty()) out.put(r[name], new String[] {f, r[export], l});
     }
     return out;
   }
@@ -176,8 +179,14 @@ public final class ArenaScene {
       float alpha) {
     float s = proj.pixelsPerDisplayUnit();
     float seconds = frame.timeMs() / 1000f;
+    drawPlaced(drawer, proj, seconds, false);
+  }
+
+  private void drawPlaced(ScDrawer drawer, ArtProjection proj, float seconds, boolean above) {
+    float s = proj.pixelsPerDisplayUnit();
     drawer.begin();
     for (Placed p : ground) {
+      if (p.above() != above) continue;
       float x = proj.arenaOriginX() + (p.x() - 9000) / 1000f * proj.pixelsPerTile();
       float y = proj.arenaOriginY() - p.y() / 1000f * proj.pixelsPerTileY();
       if (p == ground.get(0)) y -= ArtProjection.ARENA_ART_DY * s; // the background art's fit
@@ -190,9 +199,11 @@ public final class ArenaScene {
     drawer.end();
   }
 
-  /** Anything drawn above the units (none yet). */
+  /** The decorations of the {@code Above} layer, drawn over the units. */
   public void drawOverlay(
-      ScDrawer drawer, ArtProjection proj, ViewOrientation view, BattleFrame frame, float alpha) {}
+      ScDrawer drawer, ArtProjection proj, ViewOrientation view, BattleFrame frame, float alpha) {
+    drawPlaced(drawer, proj, frame.timeMs() / 1000f, true);
+  }
 
   /** Minimal CSV reader for the game's decoded tables (quoted fields, no embedded newlines). */
   static final class CsvRows {

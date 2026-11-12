@@ -111,6 +111,7 @@ public final class RealisticView implements Disposable {
     drawer.begin();
     effects.drawAbove(drawer, proj, view, seconds);
     drawer.end();
+    arena.drawOverlay(drawer, proj, view, current, 1f);
     // the in-arena HUD: health and tower bars, deploy clocks (the visualizer draws its own hands)
     hud.drawWorld(current, previous, 1f, view, proj, camera.combined);
   }
