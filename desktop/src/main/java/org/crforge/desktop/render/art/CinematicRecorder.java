@@ -69,6 +69,7 @@ public final class CinematicRecorder extends ApplicationAdapter {
   private int subFrame;
   private int framesWritten;
   private int framesWanted;
+
   /** Ticks drawn after the battle's last one (3 s). */
   private static final int OUTRO_TICKS = 60;
 
@@ -353,10 +354,16 @@ public final class CinematicRecorder extends ApplicationAdapter {
     StringBuilder sb = new StringBuilder();
     // the battle clock, for the mixer's timed sounds and music (warnings, countdown, overtime)
     if (startLeftMs >= 0) {
-      sb.append(String.format(java.util.Locale.ROOT, "{\"t\": 0.000, \"clock\": %.3f}%n", startLeftMs / 1000f));
+      sb.append(
+          String.format(
+              java.util.Locale.ROOT, "{\"t\": 0.000, \"clock\": %.3f}%n", startLeftMs / 1000f));
     }
     if (overtimeAt >= 0) {
-      sb.append(String.format(java.util.Locale.ROOT, "{\"t\": %.3f, \"overtime\": true}%n", overtimeAt - soundOrigin));
+      sb.append(
+          String.format(
+              java.util.Locale.ROOT,
+              "{\"t\": %.3f, \"overtime\": true}%n",
+              overtimeAt - soundOrigin));
     }
     for (String[] s : sounds) {
       float t = Float.parseFloat(s[0]) - soundOrigin;

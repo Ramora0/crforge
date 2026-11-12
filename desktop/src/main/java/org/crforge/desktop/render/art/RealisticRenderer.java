@@ -57,6 +57,7 @@ public final class RealisticRenderer implements Disposable {
   private ArtProjection proj;
   private Map<Integer, int[]> attacks = Map.of();
   private Map<Integer, int[]> flights = Map.of();
+
   /** The tick each king tower's activating run started, by entity id. */
   private final Map<Integer, Integer> kingWoke = new HashMap<>();
 
@@ -74,6 +75,7 @@ public final class RealisticRenderer implements Disposable {
       }
     };
   }
+
   private final Color shadowColor = new Color(0f, 0f, 100 / 255f, 0.5f);
   private EffectLayer effects;
 
@@ -331,7 +333,19 @@ public final class RealisticRenderer implements Disposable {
     }
     // a hidden unit (underground, invisible) casts no shadow
     poseAnimated(
-        out, e, unit, st, x, y, lift, seconds, tickAlpha, alpha, e.hidden() ? null : unit, y, layer);
+        out,
+        e,
+        unit,
+        st,
+        x,
+        y,
+        lift,
+        seconds,
+        tickAlpha,
+        alpha,
+        e.hidden() ? null : unit,
+        y,
+        layer);
   }
 
   private static void updateFacing(AnimState st, EntityView e, ViewOrientation view) {

@@ -23,10 +23,10 @@ import org.crforge.core.battle.unit.WorldObserver;
 import org.crforge.desktop.render.ViewOrientation;
 
 /**
- * The battle's own sounds that no unit effect starts, as the battle reports them: a card's
- * {@code CastSound} and its spell {@code Effect}'s sounds when it is played, and the crowd's
- * reaction ({@code CrowdTowerTakeDamage}, its {@code EnemyVersion} for the top side) when a crown
- * tower takes damage in an arena with {@code CrowdEffects}, at most once per 30 s per side.
+ * The battle's own sounds that no unit effect starts, as the battle reports them: a card's {@code
+ * CastSound} and its spell {@code Effect}'s sounds when it is played, and the crowd's reaction
+ * ({@code CrowdTowerTakeDamage}, its {@code EnemyVersion} for the top side) when a crown tower
+ * takes damage in an arena with {@code CrowdEffects}, at most once per 30 s per side.
  */
 public final class BattleSounds implements WorldObserver {
 
