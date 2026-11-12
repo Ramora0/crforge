@@ -45,6 +45,7 @@ crforge's desktop module can draw a battle with the game's own art, sounds and H
 | `EffectLayer`, `EffectDefs`, `EffectDrawer` | the effects table's effects with a particle simulator, tower ruins, and the sounds the effects start (§7) |
 | `BattleHud`, `HudArt`, `HudFonts` | health bars, tower bars, hands, elixir, timer and crowns from the game's UI art |
 | `CinematicRecorder` | `--record`: the offscreen video and its sound events |
+| `MatchEnd` | crown sounds, the freeze at the match's end and the replay end screen (§9) |
 | `RealisticView` | the visualizer's X mode |
 
 The rest of this document is the evidence behind the rules those classes follow.
@@ -531,7 +532,9 @@ The base is 108 du wide against a 3-tile footprint of 89 du, because the battlem
    - **King:** `King_player_die` (bottom) or `King_enemy_die` (top) → emitter `KingTower_destroyed_ground` → `Tower_destroyed_ground2`, Base layer.
    - The ruin's particle lives 800000 ms, so it is effectively permanent.
 
-`princesstower_destroyed`, `kingtower_destroyed` and the `_water` variants exist, but the Default skin does not reference them (`tower_skin_sets.csv` Default: `KingDeathFx King_player_die`, `PrincessDeathFx TowerExplode`).
+`princesstower_destroyed`, `kingtower_destroyed` and the `_water` variants exist, but the Default skin does not reference them (`tower_skin_sets.csv` Default: `KingDeathFx King_player_die`, `PrincessDeathFx TowerExplode`). `kingtower_destroyed` is the shark skin's ruin (emitter `shark_destroyed_ground`); the Default skin's own ruin emitters are `DefaultTowerKing_base` / `KingTower_destroyed_ground` → `Tower_destroyed_ground2` and `DefaultTowerPrincess_base` / `Tower_destroyed_ground` → `Tower_destroyed_ground1`. So the King's ruin is `Tower_destroyed_ground2` (91 × 88 du against the Princess's 81 × 73), drawn about 3 tiles wide on the King's 4-tile pad; the King tower's own clip is 120 du wide.
+
+**Sounds.** `TowerExplode` plays `card_common_mortar_die` (sample `building_destroyed_05`). `King_player_die` / `King_enemy_die` play `card_tower_kingtower_player_die` / `_enemy_die`, whose FMOD events hold a multi instrument with an **empty** playlist: the King's fall is silent in the banks. The crown sound and the end horn come from the match end (§9).
 
 **Health bars.** The tower rows carry their own: Princess `HealthBar Tower`, `HealthBarOffsetYBlue/Red` 62 / −12; King `Summoner`, 170 / −30.
 
@@ -852,6 +855,33 @@ An unaffordable card in the hand is turned to its luminance (grey), with no wash
 7. Health bars.
 
 `VisualLayer = GROUND` exists on a single row (a decoration dummy that draws on the ground).
+
+---
+
+## 9. Crowns and the end of the match
+
+**The core's end (DATA, `LadderMatch`).** `end()` runs once the match is decided (three crowns, or the time up with unequal crowns): `ended` is set, the timeline freezes, attack timers are held and hits refused (`BattleWorld.matchEnded`), and the winner is the side with more crowns. The battle keeps stepping for `endScreenDelayMs` (4 s in this data): the circle from a fallen king kills its side's units and buildings over the first half. Then the session is `over`. The frame's `timeMs` and the sides' elixir still run on after `end()`; the match clock the HUD shows does not.
+
+**What the recorder shows (`MatchEnd`).**
+
+| When | Shown | Heard | Label |
+|---|---|---|---|
+| A side's crowns go up | the tower's `DeathEffect` and ruin (§5.3) | `sound_get_star_player` when the bottom side takes it, `sound_get_star_enemy` (a crowd boo) when the top side does | INFERRED: crowns are "stars" in the client's names (`StarTower_*`), and the two rows sit with the battle sounds in `sounds.csv` |
+| `ended` | the HUD's clock, elixir and its rate hold their values at the end; each unit stands `idle1` at its position and facing at the end; the losing side's units still die to the circle; destroyed towers have no bar | `Gameend Horn` (`music_jingle_general_gameend_horn`); the battle music stops (a `{"t", "end": true}` line in the sounds file); no countdown or music change after it | freeze: INFERRED from the core (timeline frozen, attacks held); units idle in place: GUESS; horn at any end: INFERRED from its name |
+| `over` (4 s later) | `sc/ui_battle_end.sc` `replay_battle_end_new` over the arena, scaled so its `screen_area` (768 × 1024 du) fills the width: the 50% black backdrop (stretched to the phone's height), `player_01` (bottom side) and `player_02` panels sliding in (`appear_start..appear_end`), each won crown popping in (`crown_k`: `crown_appear_start..end`, 0.75 s + 0.4 s per crown), then `winner_start..winner_end` and `winner_txt` ("Winner!", text field 280/283) on the winner's panel; `draw` on a draw | `Win` / `Lose` / `Draw` (`music.csv`, from the bottom side's view) at its start; `sound_crown_appear_1..3` (pitched +0/+2/+4 semitones in the bank) as crowns 1..3 pop | the clip and labels are DATA; their timing, hiding the buttons, taunts, names, trophies and league, and the jingle's moment are GUESSes |
+| `over` + 4.5 s | the recording stops (`OUTRO_TICKS = 90`) | | ours |
+
+Not used: `sound_get_crown_1..3` (the same sample pitched like `crown_appear`), `First_Crown` / `Second_Crown` / `Third_Crown` (listed beside the achievement and chest sounds, likely menu sounds), `Pre_result` / `Post_result_loop` music, and the `win_battle_confetti_blue/red(_top)` effects (70 confetti particles at 100–200 speed, up to 800 z speed under -150 gravity, 10–15 s): where and when the client starts them is not in the data, and burst over the winner's king they hang over it as a cloud.
+
+**The start jingle (INFERRED).** `MUSIC_START_TIMES` starts `BattleMusic` at 180 s left, when the clock starts; the location's `Sound` jingle belongs to the intro banners before it. A recording starts at the clock, so the mixer starts the music after the jingle's length (`audio.battle_schedule`).
+
+**Thinning the mix (INFERRED, ours; `audio.py`).** The banks' own per-event limits come first (`max_instances`, stealing, `cooldown`: Skeleton steps 4 instances and 0.15 s; Archer arrow hits 2 and 0.1 s). On top of them:
+
+- footsteps and wing flaps (`*_steps`, `*_step`, `*_wing`) start at most every 0.3 s per event and play 4 dB quieter;
+- voice lines (`*_vo`, e.g. the Miner's grunt) at most every 2 s per event;
+- each still-playing instance of an event lowers a new one by 2 dB (at most 6 dB).
+
+The game's 3D attenuation, buses' snapshots and ducking are not in the parsed data; these rules stand in for them.
 
 ---
 

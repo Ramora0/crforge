@@ -325,6 +325,8 @@ public final class BattleHud implements Disposable {
       if (!e.isCharacter() || !e.hasHitPoints()) continue;
       if (e.bar() == EntityView.Bar.NONE || e.deploying() || e.hidden()) continue;
       if (e.state() == 12 || e.state() == 13) continue; // carried by another unit
+      // a destroyed crown tower is its ruin: no bar (the king stays listed at 0 after the end)
+      if (e.kind() == EntityView.Kind.TOWER && e.hitPoints() <= 0) continue;
       list.add(e);
     }
     list.sort(
