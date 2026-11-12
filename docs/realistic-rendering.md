@@ -105,6 +105,8 @@ Display units (**du**) are the SC2 coordinate units. Clip matrices and shapes ar
 
 **Confidence.** DATA.
 
+**Hero rows (INFERRED).** A hero row (`TombstoneHero`, `KnightHero`, `TombstoneHeroSkeleton`, …) has an empty `FileName` and export names: the game draws it with the 3D model its `PrefabAsset` names (`sc3d/...`), which the art cache does not hold. Such a row, when it has a `PrefabAsset` and a `Base` (`BUILDING.Tombstone`, `CHARACTER.Skeleton`), is drawn with its `Base` row's SC2 art, followed recursively. A row without a `Base` stays undrawn: the Hero Tombstone's `TombstoneHero_visual_dummy`, `TombstoneHero_Monster_Passive` and its Skeleton Queen (`TombstoneHero_Monster_Active`) have no SC2 art at all. The hero deploy effects themselves (`vfx_tombstone_hero_deploy`, `vfx_megaminion_hero_deploy`) are SC2 and are drawn as the data gives them: tall pillars (about 250 du, 8 tiles) and a dark navy back column (`vmc_megaminion_hero_deploy_backglow`, colour multiplier 0,13,51) for about a second.
+
 ### 1.2 Which actions exist
 
 These counts are over the rows' blue exports. Variants of one card (`_crazy_*`, `_chaos_*`, `_Chess`) are counted separately.
@@ -815,6 +817,10 @@ The bottom side of the `ViewOrientation` is blue/"player". **DATA.**
 
 - `healthbars.toml` (`Healthbar_Badge_*`, `Healthbar_Bar_*`) is a newer split version of the same art.
 - **Placement (INFERRED):** `bar y = top of the unit's idle1 sprite bounds + HealthBarOffsetY` (du, +y down). 220 rows set it, mostly −10; Knight's +28 cancels its raised sword. `HealthBarOffsetYBlue/Red` override it per side. Flying units add their lift.
+
+### Hand cards
+
+An unaffordable card in the hand is turned to its luminance (grey), with no wash toward white. The client's ability button has `Grayscale = true` for its `not_enough_elixir` state (`csv_client/ability_button.toml`); the hand card (`spell_card_ingame` in `sc/ui.sc`) has no disabled frame or colour of its own, so it is assumed to use the same state. **INFERRED.**
 
 ### Shader FX
 
