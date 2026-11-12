@@ -79,9 +79,13 @@ public final class RealisticRenderer implements Disposable {
   private final Color shadowColor = new Color(0f, 0f, 100 / 255f, 0.5f);
   private EffectLayer effects;
 
-  /** The effect layer whose damage flashes ({@code filter_damage}) the units show. */
+  /**
+   * The effect layer whose damage flashes ({@code filter_damage}) the units show, and whose Object
+   * layer on the ground the units sort among.
+   */
   public void setEffects(EffectLayer effects) {
     this.effects = effects;
+    if (effects != null) effects.sortObjectsWithUnits();
   }
 
   private float effectClock;
@@ -195,7 +199,17 @@ public final class RealisticRenderer implements Disposable {
     drawer.setSilhouette(true);
     for (Pose q : poses) if (q.shadowOf() != null) drawShadow(q);
     drawer.setSilhouette(false);
-    for (Pose q : poses) drawPose(q);
+    // the effects' Object layer on the ground goes y-sorted among the ground poses (§7)
+    float band = effects == null ? Float.NEGATIVE_INFINITY : Float.POSITIVE_INFINITY;
+    for (Pose q : poses) {
+      if (band != Float.NEGATIVE_INFINITY && q.layer() >= LAYER_GROUND) {
+        float to = q.layer() == LAYER_GROUND ? q.sortY() : Float.NEGATIVE_INFINITY;
+        objectEffects(to, band, view);
+        band = to;
+      }
+      drawPose(q);
+    }
+    if (band != Float.NEGATIVE_INFINITY) objectEffects(Float.NEGATIVE_INFINITY, band, view);
     drawer.end();
     if (anims.size() > 4 * frame.entities().size() + 64) {
       Set<Long> live = new HashSet<>();
@@ -204,6 +218,11 @@ public final class RealisticRenderer implements Disposable {
       }
       anims.keySet().retainAll(live);
     }
+  }
+
+  /** The effects' ground Object-layer parts whose screen y lies in (lo, hi]. */
+  private void objectEffects(float lo, float hi, ViewOrientation view) {
+    if (effects.drawObjects(drawer, proj, view, effectClock, lo, hi)) drawer.setSilhouette(false);
   }
 
   // ---------------------------------------------------------------------------------------- units
@@ -349,8 +368,15 @@ public final class RealisticRenderer implements Disposable {
   }
 
   private static void updateFacing(AnimState st, EntityView e, ViewOrientation view) {
-    float fx = view.x((float) (e.x() + e.headingX())) - view.x((float) e.x());
-    float fy = view.y((float) (e.y() + e.headingY())) - view.y((float) e.y());
+    float hx = e.headingX(), hy = e.headingY();
+    if (e.kind() == EntityView.Kind.TOWER && e.hasTarget()) {
+      // a crown tower is no character: the core never turns its facing (only the Royal Chef's
+      // throw does), so its turret and rider aim at the reference it holds
+      hx = e.targetX() - e.x();
+      hy = e.targetY() - e.y();
+    }
+    float fx = view.x((float) (e.x() + hx)) - view.x((float) e.x());
+    float fy = view.y((float) (e.y() + hy)) - view.y((float) e.y());
     if (fx * fx + fy * fy < 1e-4f) return;
     st.facingDegrees = ArtRules.facingDegrees(fx, fy);
   }

@@ -250,6 +250,20 @@ final class EffectDefs {
     }
   }
 
+  /**
+   * The {@code FlashWidth} of an effect's first component that has one: the length (du) of a beam
+   * clip as authored, which is stretched to span from its source to its target ({@code
+   * electro_giant_beam}: {@code electro_wiz_beam}, drawn from x 1 to 82). 0 for none.
+   */
+  float flashWidth(String name) {
+    if (name == null) return 0;
+    for (JsonNode c : effects.path(name).path("RenderableComponents")) {
+      int w = c.path("FlashWidth").asInt(0);
+      if (w > 0) return w;
+    }
+    return 0;
+  }
+
   Sprite sprite(String file, String export) {
     if (file == null || export == null || file.isBlank() || export.isBlank()) return null;
     ScScene scene = cache.scene(file);
