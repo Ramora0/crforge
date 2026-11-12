@@ -56,6 +56,11 @@ public final class BattleHud implements Disposable {
 
   private static final int KING_CROWN_SHAPE = 15936;
 
+  /** How far the player's tower hit points are lifted in their clips, in display units. */
+  private static final float KING_NUMBER_LIFT = 5f;
+
+  private static final float PRINCESS_NUMBER_LIFT = 3.5f;
+
   /** Match length before overtime, and overtime, in ms (the Default battle timeline). */
   private static final int REGULAR_MS = 180_000;
 
@@ -78,23 +83,27 @@ public final class BattleHud implements Disposable {
   static {
     int c = Align.center;
     int l = Align.left;
-    // unit bar level badges (player, enemy)
-    TEXT.put(15485, new TextField(11, 5, 27, 23, 14, 0xffffffff, 0xff022853, c));
-    TEXT.put(16060, new TextField(11, 5, 27, 23, 14, 0xffffffff, 0xff510018, c));
-    TEXT.put(15487, new TextField(11, 5, 27, 24, 14, 0xffffffff, 0xff022853, c));
-    TEXT.put(15489, new TextField(11, 5, 27, 24, 14, 0xffffffff, 0xff022853, c));
-    TEXT.put(15493, new TextField(11, 5, 27, 24, 14, 0xffffffff, 0xff510303, c));
-    TEXT.put(15476, new TextField(11, 5, 27, 24, 14, 0xffffffff, 0xff510303, c));
+    // the player's tower numbers hang from their box's top, which puts them on the bar (centred
+    // in their tall box they would hang below it)
+    int lt = Align.left | Align.top;
+    // unit bar level badges (player, enemy); a size under the clip's 14 keeps the game font's
+    // heavy digits inside the badge, as the game's own render does
+    TEXT.put(15485, new TextField(11, 5, 27, 23, 13, 0xffffffff, 0xff022853, c));
+    TEXT.put(16060, new TextField(11, 5, 27, 23, 13, 0xffffffff, 0xff510018, c));
+    TEXT.put(15487, new TextField(11, 5, 27, 24, 13, 0xffffffff, 0xff022853, c));
+    TEXT.put(15489, new TextField(11, 5, 27, 24, 13, 0xffffffff, 0xff022853, c));
+    TEXT.put(15493, new TextField(11, 5, 27, 24, 13, 0xffffffff, 0xff510303, c));
+    TEXT.put(15476, new TextField(11, 5, 27, 24, 13, 0xffffffff, 0xff510303, c));
     // evolved units' badges (enemy, player)
-    TEXT.put(15475, new TextField(11, 5, 27, 23, 14, 0xffffffff, 0xff500007, c));
-    TEXT.put(15483, new TextField(11, 5, 27, 23, 14, 0xffffffff, 0xff1f0651, c));
+    TEXT.put(15475, new TextField(11, 5, 27, 23, 13, 0xffffffff, 0xff500007, c));
+    TEXT.put(15483, new TextField(11, 5, 27, 23, 13, 0xffffffff, 0xff1f0651, c));
     // princess tower bar: level and hit points (player, enemy)
     TEXT.put(16080, new TextField(-2, 11, 18, 29, 14, 0xfffede2f, 0xff000000, c));
-    TEXT.put(16083, new TextField(-2, 11, 90, 31, 16, 0xffbddae9, 0xff013255, l));
+    TEXT.put(16083, new TextField(-2, 11, 90, 31, 16, 0xffbddae9, 0xff013255, lt));
     TEXT.put(16081, new TextField(-2, 11, 90, 31, 16, 0xffffe2ea, 0xff750023, l));
     // king tower bar
     TEXT.put(16084, new TextField(-2, -2, 32, 21, 18, 0xffffdf30, 0xff000000, c));
-    TEXT.put(15481, new TextField(-2, -2, 90, 21, 18, 0xffbedbea, 0xff000000, l));
+    TEXT.put(15481, new TextField(-2, -2, 90, 21, 18, 0xffbedbea, 0xff000000, lt));
     TEXT.put(16085, new TextField(-2, -2, 90, 21, 18, 0xfffed5f5, 0xff000000, l));
     // replay hand panel
     TEXT.put(1337, new TextField(-2, -2, 54, 42, 34, 0xffffffff, 0xff000000, c));
@@ -196,15 +205,8 @@ public final class BattleHud implements Disposable {
       int width,
       int height,
       Matrix4 projection) {
-    before.clear();
-    if (previous != null && alpha < 1f) {
-      for (EntityView e : previous.entities()) before.put(e.id(), e);
-    }
-    this.alpha = alpha;
-    ScScene ui = cache.scene("sc/ui.sc");
-    if (ui == null || frame == null) return;
-    tables();
-    loadBarStyles();
+    ScScene ui = prepare(frame, previous, alpha);
+    if (ui == null) return;
     art.begin(drawer.batch(), projection);
     try {
       drawHealthBars(ui, frame, view, proj);
@@ -225,6 +227,44 @@ public final class BattleHud implements Disposable {
     }
   }
 
+  /**
+   * Draws only the HUD inside the arena of {@code frame}: the units' and towers' health bars and
+   * the deploy clocks, without the hand panels, the timer or the crowns (for views that draw their
+   * own). Units are placed as in {@link #draw(BattleFrame, BattleFrame, float, ViewOrientation,
+   * ArtProjection, int, int, Matrix4)}.
+   */
+  public void drawWorld(
+      BattleFrame frame,
+      BattleFrame previous,
+      float alpha,
+      ViewOrientation view,
+      ArtProjection proj,
+      Matrix4 projection) {
+    ScScene ui = prepare(frame, previous, alpha);
+    if (ui == null) return;
+    art.begin(drawer.batch(), projection);
+    try {
+      drawHealthBars(ui, frame, view, proj);
+      drawDeployTimers(ui, frame, view, proj);
+    } finally {
+      art.end();
+    }
+  }
+
+  /** Readies a draw of {@code frame} (interpolation, tables, bar styles); returns the UI scene. */
+  private ScScene prepare(BattleFrame frame, BattleFrame previous, float alpha) {
+    before.clear();
+    if (previous != null && alpha < 1f) {
+      for (EntityView e : previous.entities()) before.put(e.id(), e);
+    }
+    this.alpha = alpha;
+    ScScene ui = cache.scene("sc/ui.sc");
+    if (ui == null || frame == null) return null;
+    tables();
+    loadBarStyles();
+    return ui;
+  }
+
   // ---------------------------------------------------------------- deploy timers
 
   /** First tick each deploying unit was seen. */
@@ -232,8 +272,8 @@ public final class BattleHud implements Disposable {
 
   /**
    * The deploy clock ({@code troopDeployTimer_player/_enemy}: 324 frames at 30 fps, {@code end} at
-   * 299) at each card play that is still deploying, one per play (the units of one card appear
-   * on one tick), timed to end when the row's {@code DeployTime} runs out.
+   * 299) at each card play that is still deploying, one per play (the units of one card appear on
+   * one tick), timed to end when the row's {@code DeployTime} runs out.
    */
   private void drawDeployTimers(
       ScScene ui, BattleFrame frame, ViewOrientation view, ArtProjection p) {
@@ -368,7 +408,11 @@ public final class BattleHud implements Disposable {
               case "bar":
                 return showBar ? barFrame : HudArt.SKIP;
               case "hpNumber":
-                return showBar || tower ? 0 : HudArt.SKIP;
+                if (!showBar && !tower) return HudArt.SKIP;
+                // the player's numbers sit low in their clips: lift them onto the bar, a little
+                // below its middle as the game draws them
+                if (blue) local.m12 -= king ? KING_NUMBER_LIFT : PRINCESS_NUMBER_LIFT;
+                return 0;
               default:
                 // an undamaged king shows its crown badge alone
                 if (kingUndamaged
@@ -573,12 +617,30 @@ public final class BattleHud implements Disposable {
   private static final float CARDS_TOP = -138.2f;
   private static final float CARDS_BOTTOM = -47.0f;
   private static final float NEXT_X = -253.8f;
-  private static final float NEXT_Y = -104.7f;
+  // the next card sits above the "Next:" label, clear of it with its elixir drop
+  private static final float NEXT_Y = -110f;
   private static final float CARD_SCALE = 0.6f;
-  private static final float NEXT_SCALE = 0.4f;
+  private static final float NEXT_SCALE = 0.32f;
   private static final float ICON_SCALE = 0.49f;
   private static final float ELIXIR_BAR_DU = 500f;
-  private static final float PANEL_SHADE = 0.66f;
+
+  /**
+   * The replay panel's colour on screen, as multipliers of its clip's own (the game recolours the
+   * panel per team at run time): the player's blue (52, 96, 164) and the opponent's red (148, 65,
+   * 54), as the game draws them.
+   */
+  private static final float[] PANEL_BLUE = {0.51f, 0.627f, 0.854f};
+
+  private static final float[] PANEL_RED = {0.66f, 0.605f, 0.66f};
+
+  /** Depth of the light bevel along the panel's edge facing the arena, in display units. */
+  private static final float PANEL_BEVEL_DU = 2.5f;
+
+  /** Opacity of the elixir pip being filled, over the bar's dark back. */
+  private static final float PIP_FILLING_ALPHA = 0.45f;
+
+  /** How far an unaffordable card is turned to the game's pale grey. */
+  private static final float UNAFFORDABLE_GRAY = 1f;
 
   private void drawPanel(
       ScScene ui,
@@ -597,9 +659,28 @@ public final class BattleHud implements Disposable {
     Affine2 panel = new Affine2().setToTranslation(width / 2f, anchorY);
     panel.scale(s, -s);
     float fill = Math.max(0f, Math.min(1f, sv.elixir() / 100000f));
+    int wholeElixir = Math.max(0, Math.min(10, sv.wholeElixir()));
+    float wholeFill = wholeElixir / 10f;
     String whole = Integer.toString(sv.wholeElixir());
-    // the panel itself, darker than its clip's colours to match the game's look on screen
-    tint.set(PANEL_SHADE, PANEL_SHADE, PANEL_SHADE * 1.08f, 1);
+    // the panel itself: its clip's own lighter colour first, showing as the bevel along the edge
+    // facing the arena, then the team's colour over it, short of that edge, with the shading
+    // along the panel's edges
+    tint.set(1, 1, 1, 1);
+    art.draw(
+        ui,
+        id,
+        0,
+        panel,
+        tint,
+        new HudArt.Hook() {
+          @Override
+          public int child(String name, int childId, Affine2 local, int frame) {
+            return name.equals("panel") ? frame : HudArt.SKIP;
+          }
+        });
+    float[] shade = view.blue(side) ? PANEL_BLUE : PANEL_RED;
+    tint.set(shade[0], shade[1], shade[2], 1);
+    float bevel = top ? -PANEL_BEVEL_DU : PANEL_BEVEL_DU;
     art.draw(
         ui,
         id,
@@ -611,12 +692,24 @@ public final class BattleHud implements Disposable {
           public int child(String name, int childId, Affine2 local, int frame) {
             boolean banner =
                 childId == 1172 || childId == 1173 || childId == 1185 || childId == 1186;
-            return !banner && (name.isEmpty() || name.equals("panel") || name.equals("panel_back"))
+            // the panel's front layer: the "panel" that holds a "panel" of its own (the
+            // innermost one is the shape's holder)
+            if (name.equals("panel")
+                && java.util.Arrays.asList(namesOf(ui, childId)).contains("panel")) {
+              local.m12 += bevel;
+            }
+            return !banner
+                    && (name.isEmpty()
+                        || name.equals("panel")
+                        || name.equals("panel_back")
+                        || name.equals("darken"))
                 ? frame
                 : HudArt.SKIP;
           }
         });
     tint.set(1, 1, 1, 1);
+    // the elixir bar: whole pips bright (the bar's body runs to the last whole one), then the
+    // pip being filled dimmer
     art.draw(
         ui,
         id,
@@ -643,13 +736,13 @@ public final class BattleHud implements Disposable {
               "clan":
                 return HudArt.SKIP;
               case "bar_body":
-                if (fill <= 0.002f) return HudArt.SKIP;
-                local.m00 = ELIXIR_BAR_DU * fill / 18f;
+                if (wholeElixir == 0) return HudArt.SKIP;
+                local.m00 = ELIXIR_BAR_DU * wholeFill / 18f;
                 local.m02 = -1.5f;
                 return frame;
               case "bar_end":
-                if (fill <= 0.002f) return HudArt.SKIP;
-                local.m02 = -1.5f + ELIXIR_BAR_DU * fill - 0.7f;
+                if (wholeElixir == 0) return HudArt.SKIP;
+                local.m02 = -1.5f + ELIXIR_BAR_DU * wholeFill - 0.7f;
                 return frame;
               default:
                 if (name.length() == 2
@@ -675,8 +768,39 @@ public final class BattleHud implements Disposable {
             }
           }
         });
+    float filling = fill - wholeFill;
+    if (filling > 0.002f) {
+      tint.set(1, 1, 1, PIP_FILLING_ALPHA);
+      art.draw(
+          ui,
+          id,
+          0,
+          panel,
+          tint,
+          new HudArt.Hook() {
+            /** Whether the walk is inside the bar's body, whose shape is unnamed. */
+            private boolean inBody;
 
-    // the four cards and the next one
+            @Override
+            public int child(String name, int childId, Affine2 local, int frame) {
+              if (name.isEmpty()) return inBody ? frame : HudArt.SKIP;
+              inBody = name.equals("bar_body");
+              switch (name) {
+                case "elixir_bar":
+                  return frame;
+                case "bar_body":
+                  local.m00 = ELIXIR_BAR_DU * filling / 18f;
+                  local.m02 = -1.5f + ELIXIR_BAR_DU * wholeFill;
+                  return frame;
+                default:
+                  return HudArt.SKIP;
+              }
+            }
+          });
+      tint.set(1, 1, 1, 1);
+    }
+
+    // the four cards and the next one, each with its elixir drop
     float cardsTop = top ? -CARDS_BOTTOM : CARDS_TOP;
     float cardsBottom = top ? -CARDS_TOP : CARDS_BOTTOM;
     float cy = (cardsTop + cardsBottom) / 2f;
@@ -686,14 +810,19 @@ public final class BattleHud implements Disposable {
       if (card == null) continue;
       float cx = CARDS_LEFT + slot * (i + 0.5f);
       boolean affordable = card.cost() <= sv.wholeElixir();
-      drawCard(ui, card, panel, cx, cy - 4f, CARD_SCALE, affordable, true);
+      drawCard(ui, card, panel, cx, cy - 4f, CARD_SCALE, affordable);
     }
     if (sv.next() != null) {
-      float ny = top ? 97.3f : NEXT_Y;
-      drawCard(ui, sv.next(), panel, NEXT_X, ny, NEXT_SCALE, true, false);
+      float ny = top ? -NEXT_Y - 14f : NEXT_Y;
+      boolean affordable = sv.next().cost() <= sv.wholeElixir();
+      drawCard(ui, sv.next(), panel, NEXT_X, ny, NEXT_SCALE, affordable);
     }
   }
 
+  /**
+   * One card of a hand at ({@code cx}, {@code cy}) in the panel's units: its frame, its icon and
+   * its elixir drop, turned grey while the player cannot afford it (as the game shows it).
+   */
   private void drawCard(
       ScScene ui,
       BattleFrame.CardView card,
@@ -701,14 +830,23 @@ public final class BattleHud implements Disposable {
       float cx,
       float cy,
       float scale,
-      boolean affordable,
-      boolean cost) {
+      boolean affordable) {
     int id = ui.export("spell_card_ingame");
     if (id < 0) return;
     CardArt icon = cardArt(card.name());
     Affine2 t = new Affine2(panel).translate(cx, cy).scale(scale, scale);
-    float g = affordable ? 1f : 0.55f;
-    tint.set(g, g, affordable ? 1f : 0.6f, 1f);
+    tint.set(1, 1, 1, 1);
+    art.setGray(affordable ? 0f : UNAFFORDABLE_GRAY);
+    try {
+      drawCardLayers(ui, id, icon, card, t);
+    } finally {
+      art.setGray(0f);
+      tint.set(1, 1, 1, 1);
+    }
+  }
+
+  private void drawCardLayers(
+      ScScene ui, int id, CardArt icon, BattleFrame.CardView card, Affine2 t) {
     boolean legendary = icon != null && "Legendary".equalsIgnoreCase(icon.rarity());
     final Affine2[] imageLocal = {null};
     // pass 1: the card's back and, in its image's place, the card's icon
@@ -745,8 +883,7 @@ public final class BattleHud implements Disposable {
             return switch (name) {
               case "frame" -> legendary ? HudArt.SKIP : 0;
               case "frame_legendary" -> legendary ? 0 : HudArt.SKIP;
-              case "elixar_count" -> cost ? frame : HudArt.SKIP;
-              case "card_txt_bg", "count", "" -> frame;
+              case "elixar_count", "card_txt_bg", "count", "" -> frame;
               default -> HudArt.SKIP;
             };
           }
@@ -825,6 +962,12 @@ public final class BattleHud implements Disposable {
       }
     }
     return null;
+  }
+
+  /** The child names of clip {@code id} of {@code scene}, empty when it has none. */
+  private String[] namesOf(ScScene scene, int id) {
+    String[] n = art.names(scene, id);
+    return n == null ? new String[0] : n;
   }
 
   // ---------------------------------------------------------------- timer and crowns

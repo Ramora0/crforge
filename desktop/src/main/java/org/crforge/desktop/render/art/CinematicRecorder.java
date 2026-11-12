@@ -121,6 +121,7 @@ public final class CinematicRecorder extends ApplicationAdapter {
     effects = new EffectLayer(cache);
     // every hit and every short-lived area effect (a Zap lives 1 ms), as the battle reports them
     session.getBattle().getWorld().addObserver(effects.observer());
+    session.getBattle().getWorld().addObserver(renderer.observer());
 
     // fast-forward to the start
     int startTick = Math.round(settings.fromSeconds() * TICKS_PER_SECOND);

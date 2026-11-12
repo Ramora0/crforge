@@ -41,6 +41,9 @@ final class HudFonts implements Disposable {
     System.getProperty("user.home") + "/.crforge/fonts/supercell-magic_0.ttf",
   };
 
+  /** Gap between a top-aligned field's top and its capitals, in font sizes. */
+  private static final float TOP_INSET = 0.1f;
+
   private static final String CHARS = FreeTypeFontGenerator.DEFAULT_CHARS + "×";
 
   private FreeTypeFontGenerator generator;
@@ -112,7 +115,7 @@ final class HudFonts implements Disposable {
   /**
    * Draws {@code text} in the box (world pixels, y up: left, bottom, width, height), horizontally
    * aligned by {@code align} ({@link Align#left}, {@link Align#center} or {@link Align#right}) and
-   * centred vertically.
+   * centred vertically, or hung from the box's top when {@code align} has {@link Align#top}.
    */
   void draw(
       Batch batch,
@@ -136,9 +139,13 @@ final class HudFonts implements Disposable {
     } else if ((align & Align.right) != 0) {
       x = left + width - layout.width;
     }
-    // BitmapFont draws from the top of the line; centre the cap height in the box
+    // BitmapFont draws from the top of the capitals: a top-aligned field (as the game sets the
+    // fields it does not centre) hangs them from the box's top, else they are centred in it
     float capHeight = f.getCapHeight();
-    float y = bottom + height / 2f + capHeight / 2f;
+    float y =
+        (align & Align.top) != 0
+            ? bottom + height - px * TOP_INSET
+            : bottom + height / 2f + capHeight / 2f;
     f.draw(batch, text, x, y);
   }
 

@@ -31,6 +31,7 @@ public final class RealisticView implements Disposable {
   private final ArtCache cache;
   private final RealisticRenderer renderer;
   private final EffectLayer effects;
+  private final BattleHud hud;
   private ArenaScene arena;
   private GameTables arenaTables;
   private BattleFrame previous;
@@ -41,6 +42,7 @@ public final class RealisticView implements Disposable {
     this.cache = cache;
     this.renderer = new RealisticRenderer(cache);
     this.effects = new EffectLayer(cache);
+    this.hud = new BattleHud(cache, renderer.drawer());
   }
 
   /** The realistic view, when this machine has an art cache. */
@@ -58,6 +60,7 @@ public final class RealisticView implements Disposable {
     if (session == null) return;
     if (session != observed) {
       session.getBattle().getWorld().addObserver(effects.observer());
+      session.getBattle().getWorld().addObserver(renderer.observer());
       observed = session;
     }
     renderer.setTickData(
@@ -75,6 +78,7 @@ public final class RealisticView implements Disposable {
       arena = new ArenaScene(cache, tables, System.getProperty("crforge.art.location"));
       int[] sh = arena.shadow();
       renderer.setShadowColor(sh[0], sh[1], sh[2], sh[3]);
+      hud.setTables(tables);
       arenaTables = tables;
     }
     if (frame.tick() != lastTick) {
@@ -105,12 +109,15 @@ public final class RealisticView implements Disposable {
     drawer.begin();
     effects.drawAbove(drawer, proj, view, seconds);
     drawer.end();
+    // the in-arena HUD: health and tower bars, deploy clocks (the visualizer draws its own hands)
+    hud.drawWorld(current, previous, 1f, view, proj, camera.combined);
   }
 
   @Override
   public void dispose() {
     renderer.dispose();
     effects.dispose();
+    hud.dispose();
     cache.dispose();
   }
 }

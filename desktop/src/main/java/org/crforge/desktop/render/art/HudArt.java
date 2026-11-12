@@ -71,21 +71,31 @@ final class HudArt implements Disposable {
           + "  gl_Position = u_projTrans * a_position;\n"
           + "}\n";
 
-  /** Premultiplied texture times premultiplied vertex colour, plus the additive colour. */
+  /**
+   * Premultiplied texture times premultiplied vertex colour, plus the additive colour, then mixed
+   * toward its own luminance by {@code u_gray} and washed toward white by 0.4 of it (the game's
+   * pale grey for the hand's unaffordable cards).
+   */
   private static final String FRAGMENT =
       "#ifdef GL_ES\nprecision mediump float;\n#endif\n"
           + "varying vec4 v_color;\n"
           + "varying vec2 v_texCoords;\n"
           + "uniform sampler2D u_texture;\n"
           + "uniform vec3 u_add;\n"
+          + "uniform float u_gray;\n"
           + "void main() {\n"
           + "  vec4 c = v_color * texture2D(u_texture, v_texCoords);\n"
           + "  c.rgb = min(c.rgb + u_add * c.a, vec3(c.a));\n"
+          + "  c.rgb = mix(c.rgb, vec3(dot(c.rgb, vec3(0.299, 0.587, 0.114))), u_gray);\n"
+          + "  c.rgb = mix(c.rgb, vec3(c.a), u_gray * 0.4);\n"
           + "  gl_FragColor = c;\n"
           + "}\n";
 
+  /** What HudArt reads of a scene's JSON beyond {@link ScScene}: child names and text fields. */
+  private record SceneInfo(Map<Integer, String[]> names, java.util.Set<Integer> texts) {}
+
   private final ArtCache cache;
-  private final Map<String, Map<Integer, String[]>> names = new HashMap<>();
+  private final Map<String, SceneInfo> infos = new HashMap<>();
   private final float[] verts = new float[MAX_VERTS * 5];
   private final short[] tris = new short[MAX_VERTS * 3];
   private final Affine2[] stack = new Affine2[MAX_DEPTH + 1];
@@ -95,6 +105,7 @@ final class HudArt implements Disposable {
   private ShaderProgram shader;
   private PolygonSpriteBatch batch;
   private float addR = -1, addG = -1, addB = -1;
+  private float gray = -1;
   private int currentBlend = -1;
 
   // bounds accumulation (when measuring instead of drawing)
@@ -126,8 +137,10 @@ final class HudArt implements Disposable {
     batch.begin();
     currentBlend = -1;
     addR = addG = addB = -1;
+    gray = -1;
     setBlend(ScDrawer.BLEND_NORMAL);
     setAdd(0, 0, 0);
+    setGray(0f);
   }
 
   void end() {
@@ -138,6 +151,19 @@ final class HudArt implements Disposable {
 
   PolygonSpriteBatch batch() {
     return batch;
+  }
+
+  /**
+   * How far what is drawn next is turned to a pale grey, 0 (its colours) to 1 (its luminance,
+   * washed 40% toward white), until changed again; {@link #begin} resets it to 0.
+   */
+  void setGray(float amount) {
+    if (shader == null) return;
+    amount = Math.max(0f, Math.min(1f, amount));
+    if (amount == gray) return;
+    batch.flush();
+    gray = amount;
+    shader.setUniformf("u_gray", amount);
   }
 
   /** Switches the batch to straight-alpha drawing (fonts), no additive colour. */
@@ -151,24 +177,48 @@ final class HudArt implements Disposable {
 
   /** The child names of the clips of a scene, read once from its JSON. */
   String[] names(ScScene scene, int clipId) {
-    Map<Integer, String[]> byClip =
-        names.computeIfAbsent(scene.folder().resolve(scene.file()).toString(), k -> read(scene));
-    return byClip.get(clipId);
+    return info(scene).names().get(clipId);
   }
 
-  private Map<Integer, String[]> read(ScScene scene) {
+  /**
+   * Whether object {@code id} of a clip is a mask modifier rather than something drawn: neither a
+   * shape, a clip nor a text field. Within a frame the modifiers come in threes around a mask: the
+   * first starts the mask (the child after it is the mask's shape), the second its masked content,
+   * the third ends it. False for every id of a scene whose text fields are not listed.
+   */
+  private boolean isModifier(ScScene scene, int id) {
+    java.util.Set<Integer> texts = info(scene).texts();
+    return !texts.isEmpty()
+        && !texts.contains(id)
+        && scene.shape(id) == null
+        && scene.clip(id) == null;
+  }
+
+  private SceneInfo info(ScScene scene) {
+    return infos.computeIfAbsent(scene.folder().resolve(scene.file()).toString(), k -> read(scene));
+  }
+
+  private SceneInfo read(ScScene scene) {
     Map<Integer, String[]> out = new HashMap<>();
+    java.util.Set<Integer> texts = new java.util.HashSet<>();
     String stem = scene.file();
     int slash = stem.lastIndexOf('/');
     if (slash >= 0) stem = stem.substring(slash + 1);
     if (stem.endsWith(".sc")) stem = stem.substring(0, stem.length() - 3);
     Path json = scene.folder().resolve(stem + ".json");
-    if (!Files.isRegularFile(json)) return out;
+    if (!Files.isRegularFile(json)) return new SceneInfo(out, texts);
     try (JsonParser p = new JsonFactory().createParser(json.toFile())) {
-      if (p.nextToken() != JsonToken.START_OBJECT) return out;
+      if (p.nextToken() != JsonToken.START_OBJECT) return new SceneInfo(out, texts);
       while (p.nextToken() == JsonToken.FIELD_NAME) {
         String field = p.currentName();
         p.nextToken();
+        if ("text".equals(field) && p.currentToken() == JsonToken.START_ARRAY) {
+          while (p.nextToken() != JsonToken.END_ARRAY) {
+            if (p.currentToken() == JsonToken.VALUE_NUMBER_INT) texts.add(p.getIntValue());
+            else p.skipChildren();
+          }
+          continue;
+        }
         if (!"clips".equals(field)) {
           p.skipChildren();
           continue;
@@ -192,7 +242,7 @@ final class HudArt implements Disposable {
     } catch (IOException | RuntimeException e) {
       log.warn("Cannot read the clip names of {}: {}", json, e.getMessage());
     }
-    return out;
+    return new SceneInfo(out, texts);
   }
 
   /** Draws object {@code id} at {@code frame}, {@code hook} deciding for its named children. */
@@ -240,11 +290,19 @@ final class HudArt implements Disposable {
     String[] childNames = names(scene, id);
     int[] elements = clip.frames()[Math.floorMod(frame, clip.frameCount())];
     ScScene.Bank bank = scene.bank(clip.bank());
+    // 1 after a mask's start (its shape follows, not drawn), 2 in its content; the content is
+    // drawn unclipped (the HUD's clips keep it inside the mask where they are drawn)
+    int maskStep = 0;
     for (int k = 0; k + 2 < elements.length; k += 3) {
       int child = elements[k];
       int mi = elements[k + 1];
       int ci = elements[k + 2];
       if (child < 0 || child >= clip.children().length) continue;
+      if (isModifier(scene, clip.children()[child])) {
+        maskStep = (maskStep + 1) % 3;
+        continue;
+      }
+      if (maskStep == 1) continue;
       Affine2 local = locals[depth + 1];
       local.idt();
       if (mi != ScScene.IDENTITY && bank != null && mi * 6 + 5 < bank.matrices().length) {

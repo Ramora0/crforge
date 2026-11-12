@@ -57,6 +57,23 @@ public final class RealisticRenderer implements Disposable {
   private ArtProjection proj;
   private Map<Integer, int[]> attacks = Map.of();
   private Map<Integer, int[]> flights = Map.of();
+  /** The tick each king tower's activating run started, by entity id. */
+  private final Map<Integer, Integer> kingWoke = new HashMap<>();
+
+  /** Tells the renderer when each king tower starts waking (its clip's activation frames). */
+  public org.crforge.core.battle.unit.WorldObserver observer() {
+    return new org.crforge.core.battle.unit.WorldObserver() {
+      @Override
+      public void activation(
+          int tick,
+          org.crforge.core.battle.unit.TowerEntity king,
+          org.crforge.core.battle.unit.ActivationEvent event) {
+        if (event.kind() == org.crforge.core.battle.unit.ActivationEvent.Kind.ACTIVATING_STARTED) {
+          kingWoke.putIfAbsent(king.getId(), tick);
+        }
+      }
+    };
+  }
   private final Color shadowColor = new Color(0f, 0f, 100 / 255f, 0.5f);
 
   /**
@@ -215,9 +232,10 @@ public final class RealisticRenderer implements Disposable {
       int turret = base == null ? -1 : base.childNamed("turret");
       int kingDummy = base == null ? -1 : base.childNamed("king_dummy");
       if (turret >= 0 || kingDummy >= 0) {
-        // the king tower: the clip's timeline is its waking, the turret's its aim
-        boolean active = e.hasTarget() || state == GridEntityState.ATTACKING;
-        if (active && st.activatedAt < 0) st.activatedAt = seconds;
+        // the king tower: the clip's timeline is its waking (from the core's activating run),
+        // the turret's its aim
+        Integer woke = kingWoke.get(e.id());
+        if (woke != null && st.activatedAt < 0) st.activatedAt = woke * TICK_SECONDS;
         if (st.activatedAt >= 0) {
           f = Math.min(KING_ACTIVE_FRAME, 1 + (int) ((seconds - st.activatedAt) * base.fps()));
         }
@@ -296,7 +314,9 @@ public final class RealisticRenderer implements Disposable {
       }
       return;
     }
-    poseAnimated(out, e, unit, st, x, y, lift, seconds, tickAlpha, alpha, unit, y, layer);
+    // a hidden unit (underground, invisible) casts no shadow
+    poseAnimated(
+        out, e, unit, st, x, y, lift, seconds, tickAlpha, alpha, e.hidden() ? null : unit, y, layer);
   }
 
   private static void updateFacing(AnimState st, EntityView e, ViewOrientation view) {
