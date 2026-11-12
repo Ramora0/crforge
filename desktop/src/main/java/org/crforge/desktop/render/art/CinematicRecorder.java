@@ -53,6 +53,7 @@ public final class CinematicRecorder extends ApplicationAdapter {
   private BattleHud hud;
   private EffectLayer effects;
   private BattleSounds battleSounds;
+  private MatchEnd matchEnd;
   private float overtimeAt = -1;
   private int startLeftMs = -1;
   private FrameBuffer fbo;
@@ -70,8 +71,8 @@ public final class CinematicRecorder extends ApplicationAdapter {
   private int framesWritten;
   private int framesWanted;
 
-  /** Ticks drawn after the battle's last one (3 s). */
-  private static final int OUTRO_TICKS = 60;
+  /** Ticks drawn after the battle's last one (4.5 s: the end screen plays in them). */
+  private static final int OUTRO_TICKS = 90;
 
   private int outroTicks;
   private final java.util.List<String[]> sounds = new java.util.ArrayList<>();
@@ -135,7 +136,8 @@ public final class CinematicRecorder extends ApplicationAdapter {
     while (session.tick() < startTick && player.step()) {
       player.drainAreaHits();
     }
-    current = BattleAdapter.frame(player.getSession(), view::sideName);
+    matchEnd = new MatchEnd(cache);
+    current = matchEnd.update(BattleAdapter.frame(player.getSession(), view::sideName), view);
     renderer.setTickData(
         BattleAdapter.attackTimers(player.getSession()),
         BattleAdapter.projectileFlights(player.getSession()));
@@ -143,6 +145,7 @@ public final class CinematicRecorder extends ApplicationAdapter {
     soundOrigin = current.tick() * 0.05f;
     sounds.addAll(effects.drainSounds());
     battleSounds.drain(); // what the fast-forward heard
+    matchEnd.drainSounds();
     if (settings.fromSeconds() <= 0.01f) battleSounds.matchStart(arena.locationName(), soundOrigin);
     startLeftMs = current.overtime() ? -1 : Math.max(0, 180_000 - current.timeMs());
     previous = current;
@@ -216,9 +219,10 @@ public final class CinematicRecorder extends ApplicationAdapter {
             break;
           }
           outroTicks++;
-          current = later(current);
+          matchEnd.stopped();
+          current = matchEnd.update(later(current), view);
         } else {
-          current = BattleAdapter.frame(player.getSession(), view::sideName);
+          current = matchEnd.update(BattleAdapter.frame(player.getSession(), view::sideName), view);
         }
         renderer.setTickData(
             BattleAdapter.attackTimers(player.getSession()),
@@ -226,6 +230,7 @@ public final class CinematicRecorder extends ApplicationAdapter {
         effects.update(current, previous, tables, view);
         sounds.addAll(effects.drainSounds());
         sounds.addAll(battleSounds.drain());
+        sounds.addAll(matchEnd.drainSounds());
         if (current.overtime() && overtimeAt < 0) overtimeAt = current.tick() * 0.05f;
       }
       float alpha = still ? 1f : (subFrame + 1f) / perTick;
@@ -282,7 +287,17 @@ public final class CinematicRecorder extends ApplicationAdapter {
     camera.position.set(settings.width() / 2f, settings.height() / 2f, 0);
     camera.update();
     hud.draw(
-        current, previous, alpha, view, proj, settings.width(), settings.height(), camera.combined);
+        matchEnd.hud(current),
+        matchEnd.hud(previous),
+        alpha,
+        view,
+        proj,
+        settings.width(),
+        settings.height(),
+        camera.combined);
+    float tickSeconds = (previous.tick() + (current.tick() - previous.tick()) * alpha) * 0.05f;
+    matchEnd.draw(
+        tickSeconds, settings.width(), settings.height(), renderer.drawer(), camera.combined);
     pixels.clear();
     Gdx.gl.glPixelStorei(GL20.GL_PACK_ALIGNMENT, 1);
     Gdx.gl.glReadPixels(
@@ -358,6 +373,14 @@ public final class CinematicRecorder extends ApplicationAdapter {
           String.format(
               java.util.Locale.ROOT, "{\"t\": 0.000, \"clock\": %.3f}%n", startLeftMs / 1000f));
     }
+    if (matchEnd.ended()) {
+      // the match's end: the mixer stops the battle music and the clock's sounds here
+      sb.append(
+          String.format(
+              java.util.Locale.ROOT,
+              "{\"t\": %.3f, \"end\": true}%n",
+              Math.max(0f, matchEnd.endSeconds() - soundOrigin)));
+    }
     if (overtimeAt >= 0) {
       sb.append(
           String.format(
@@ -385,6 +408,7 @@ public final class CinematicRecorder extends ApplicationAdapter {
   @Override
   public void dispose() {
     if (effects != null) effects.dispose();
+    if (matchEnd != null) matchEnd.dispose();
     if (fbo != null) fbo.dispose();
     if (renderer != null) renderer.dispose();
     if (cache != null) cache.dispose();
