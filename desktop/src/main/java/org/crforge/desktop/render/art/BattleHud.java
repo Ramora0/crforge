@@ -835,7 +835,9 @@ public final class BattleHud implements Disposable {
       boolean affordable) {
     int id = ui.export("spell_card_ingame");
     if (id < 0) return;
-    CardArt icon = cardArt(card.name());
+    // a hero slot's card shows its hero form's card art (ui_card_tombstone_hero)
+    CardArt icon = card.formName() == null ? null : cardArt(card.formName());
+    if (icon == null) icon = cardArt(card.name());
     Affine2 t = new Affine2(panel).translate(cx, cy).scale(scale, scale);
     tint.set(1, 1, 1, 1);
     art.setGray(affordable ? 0f : UNAFFORDABLE_GRAY);

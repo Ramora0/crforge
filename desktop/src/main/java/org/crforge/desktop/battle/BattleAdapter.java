@@ -469,7 +469,8 @@ public final class BattleAdapter {
                 card.cost(),
                 session.handCardLevel(side, slot),
                 session.isPending(side, slot),
-                session.cardUnavailableReason(side, slot)));
+                session.cardUnavailableReason(side, slot),
+                formName(matchSide, card, matchSide.getHand().slots()[slot])));
       }
     }
     MatchCard next = session.nextCard(side);
@@ -486,7 +487,18 @@ public final class BattleAdapter {
         next == null
             ? null
             : new BattleFrame.CardView(
-                next.name(), next.cost(), session.nextCardLevel(side), false, "not in hand"),
+                next.name(),
+                next.cost(),
+                session.nextCardLevel(side),
+                false,
+                "not in hand",
+                formName(matchSide, next, matchSide.getHand().queue().get(0))),
         Collections.unmodifiableList(abilities));
+  }
+
+  /** The row a deck card is played as from its slot: its hero row in a hero slot. */
+  private static String formName(MatchSide side, MatchCard card, int deckIndex) {
+    boolean hero = deckIndex >= 0 && (side.slotFlags(deckIndex) & MatchSide.HERO_SLOT) != 0;
+    return hero ? card.formRow(MatchCard.HERO_FORM).name() : card.name();
   }
 }
