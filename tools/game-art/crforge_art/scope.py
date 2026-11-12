@@ -32,7 +32,8 @@ SKIP_COLUMNS = {"IconSWF", "HighresPlaceholderAsset", "PopoverIconFileName", "Le
 CLIENT_GLOBALS_KEEP = {"ui.sc", "ui_battle_banners.sc", "effects.sc"}
 
 FAMILIES = ["chr_*.sc", "building_*.sc", "level_*.sc", "arena_*.sc", "effects*.sc"]
-BATTLE_UI = ["ui.sc", "ui_spells.sc", "ui_ability_button.sc", "ui_spectate_hud.sc", "ui_battle*.sc"]
+BATTLE_UI = ["ui.sc", "ui_spells.sc", "ui_ability_button.sc", "ui_spectate_hud.sc", "ui_battle*.sc",
+             "ui_card_*.sc"]  # newer cards keep their hand icon in a file of their own (IconSWF)
 COSMETIC = ["*prestige*", "*towerskin*", "*tower_skin*", "*emote*", "*chest*", "*shop*", "*battle_pass*"]
 
 _REF = re.compile(r"sc/([^\s\"',;#\]\[]+?\.sc)(?![a-z0-9_])", re.I)
