@@ -3,3 +3,7 @@
 *.png
 *.sctx
 *.sc
+*.glb
+*.ktx
+*.rmat
+*.scdb
