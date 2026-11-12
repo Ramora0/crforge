@@ -5,6 +5,7 @@
     crforge-art extract --adb [SERIAL]                      # pull the APKs from a connected device
     crforge-art extract ... --audio                         # also decode the battle sounds
     crforge-art audio battle.mp4                            # mix a recording's sounds into it
+    crforge-art sc3d --apk base.apk split_*.apk             # 3D characters -> glTF (<cache>/<sha>/sc3d/)
 """
 from __future__ import annotations
 
@@ -59,7 +60,35 @@ def main(argv: list[str] | None = None) -> int:
                     help="locations.csv row for the start jingle / overtime music (default PvP_royal)")
     au.add_argument("--report", action="store_true",
                     help="list each recorded event and how it was resolved (exact / fallback)")
+    s3 = sub.add_parser("sc3d", help="extract the 3D (sc3d) characters as standard glTF 2.0 .glb files")
+    s3g = s3.add_mutually_exclusive_group(required=True)
+    s3g.add_argument("--adb", nargs="?", const="", metavar="SERIAL", help="pull the APKs over adb")
+    s3g.add_argument("--apk", nargs="+", metavar="PATH", help="APK files and/or .xapk/.apkm bundles")
+    s3g.add_argument("--assets", metavar="DIR", help="an already-extracted assets/ folder")
+    s3.add_argument("--out", default=DEFAULT_OUT, help=f"cache root (default {DEFAULT_OUT})")
+    s3.add_argument("--scope", choices=["battle", "all"], default="battle",
+                    help="battle: prefabs named by the logic tables' PrefabAsset (default); all: every prefab")
+    s3.add_argument("--only", nargs="+", metavar="NAME",
+                    help="just these prefabs: a table row (TombstoneHero), a prefab name or path")
+    s3.add_argument("--force", action="store_true", help="rebuild models already in the cache")
     args = ap.parse_args(argv)
+
+    if args.cmd == "sc3d":
+        from . import sc3d, sources
+
+        src = (sources.from_adb(args.adb or None) if args.adb is not None else
+               sources.from_apks(args.apk) if args.apk else sources.from_assets_dir(args.assets))
+        try:
+            r = sc3d.run(src, Path(args.out), scope=args.scope, only=args.only, force=args.force)
+        finally:
+            src.close()
+        print()
+        print(f"sc3d done in {r.seconds:.1f}s: {r.models} models built ({r.clips} clips), "
+              f"{r.skipped} already present, {len(r.errors)} errors")
+        for k, e in sorted(r.errors.items()):
+            print(f"  {k}: {e}")
+        print(f"cache: {r.root / 'sc3d'}")
+        return 1 if r.errors and not r.models and not r.skipped else 0
 
     if args.cmd == "audio":
         import json as _json
